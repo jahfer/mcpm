@@ -37,7 +37,7 @@ require 'yaml'
 CLI::UI::StdoutRouter.enable
 
 # --- CONFIGURATION ---
-config_base_dir = File.join(__dir__, 'worlds', 'friends')
+config_base_dir = File.join(__dir__, '..', '..', 'worlds', 'friends')
 
 CONFIG = {
   server_name: 'redstoner',
