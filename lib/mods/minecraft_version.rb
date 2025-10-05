@@ -5,23 +5,9 @@ MinecraftVersion = Data.define(:version_number) do
 
     self_parts <=> other_parts
   end
-
-  def ==(other)
-    return false unless self.version_number == other.version_number
-
-    true
-  end
-
-  def eql?(other)
-    unless other.is_a?(self.class)
-      binding.break
-      return false 
-    end
-    self == other
-  end
   
   include Comparable
-
+  
   def release?
     return false if version_number.nil? || version_number.empty?
 

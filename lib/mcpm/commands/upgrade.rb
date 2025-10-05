@@ -1,4 +1,5 @@
 require "mods/mods"
+require "mods/updater"
 
 class Upgrade < CLI::Kit::BaseCommand
   command_name('upgrade')
@@ -22,11 +23,16 @@ class Upgrade < CLI::Kit::BaseCommand
     def ignore_optional
       flag(short: '-i', long: '--ignore-optional', desc: 'Ignore optional mods when determining upgrade compatibility')
     end
+
+    def force
+      flag(short: '-f', long: '--force', desc: 'Force the upgrade even if not all mods support the target Minecraft version')
+    end
   end
   
   def invoke(op, _name)
     config = nil
     installed_mods = nil
+    missing_mods = nil
 
     CLI::UI::Frame.open("Mod Discovery") do
       puts CLI::UI.fmt("{{blue:🔍}} Loading mod configuration and discovering installed mods...")
@@ -115,13 +121,17 @@ class Upgrade < CLI::Kit::BaseCommand
       end
     end
 
+    upgradeable_minecraft_version = latest_common_version
     CLI::UI::Frame.open("Upgrade Minecraft") do
       if latest_common_version > config.minecraft_version
         puts CLI::UI.fmt("\n{{green:🎉 An upgrade is available to Minecraft version #{latest_common_version}!}}")
       elsif op.ignore_optional
         required_common_version = required_supported_minecraft_versions.reduce(:&).sort.last
         if required_common_version && required_common_version > config.minecraft_version
+          upgradeable_minecraft_version = required_common_version
           puts CLI::UI.fmt("{{green:🚀 Ignoring optional mods, the server can be upgraded to {{bold:#{required_common_version}}}!}}")
+        elsif op.force
+          puts CLI::UI.fmt("{{yellow:⚠ Forcing upgrade despite not all required mods supporting a Minecraft version newer than {{bold:#{config.minecraft_version}}}.}}")
         else
           puts CLI::UI.fmt("{{yellow:ℹ No upgrade available, not all required mods support a Minecraft version newer than {{bold:#{config.minecraft_version}}}.}}")
           return
@@ -137,7 +147,83 @@ class Upgrade < CLI::Kit::BaseCommand
         return
       end
 
-      puts CLI::UI.fmt("\n{{yellow:⚠ Upgrade not yet implemented, please check back later.}}")
+      Mods::Updater.attempt_update(config, to_minecraft_version: upgradeable_minecraft_version) do |updater|
+        puts CLI::UI.fmt("{{blue:🔧}} Upgrading server to Minecraft version {{bold:#{upgradeable_minecraft_version}}}...")
+
+        mods_to_update = installed_mods.map(&:declaration) + missing_mods
+
+        state = {
+          successful: [],
+          failed: [],
+          processing: [],
+          waiting: mods_to_update.dup
+        }
+
+        spinner_title = ->() { " Updating mods: {{@widget/status:#{state[:successful].length}:#{state[:failed].length}:#{state[:processing].length}:#{state[:waiting].length}}}" }
+
+        CLI::UI::Frame.open("Downloading mods") do
+          CLI::UI::Spinner.spin(spinner_title.call) do |spinner|
+            mods_to_update.each_with_index do |mod, index|
+              state[:waiting].delete(mod)
+              state[:processing] << mod
+              spinner.update_title(spinner_title.call)
+
+              success = false
+              
+              begin
+                updater.update_mod(mod)
+                success = true
+              rescue Mods::Modrinth::NotFoundError => e
+                puts CLI::UI.fmt("{{yellow:⚠}} Could not find an updated version for mod {{cyan:#{mod.name}}}: #{e.message}")
+              rescue Mods::Modrinth::APIError => e
+                puts CLI::UI.fmt("{{red:✗}} Error while checking for updates for mod {{cyan:#{mod.name}}}: #{e.message}")
+              rescue => e
+                puts CLI::UI.fmt("{{red:✗ Unexpected error while updating {{cyan:#{mod.name}}}: #{e.message}}}")
+              ensure
+                state[:processing].delete(mod)
+
+                if success
+                  state[:successful] << mod
+                else
+                  state[:failed] << mod
+                end
+
+                spinner.update_title(spinner_title.call)
+                updater.fail! unless success
+              end
+            end
+
+            spinner.update_title(" All mods downloaded successfully")
+          end
+
+          if updater.failed?
+            puts CLI::UI.fmt("{{red:✗}} The following mods failed to upgrade, no changes have been made.")
+
+            state[:failed].each do |mod|
+              puts CLI::UI.fmt("  {{red:•}} {{cyan:#{mod.name}}}")
+            end
+
+            exit 1 
+          end
+        end
+
+        CLI::UI::Frame.open("Applying Mod Updates") do
+          updater.backup_existing_mods
+          puts CLI::UI.fmt("{{v}} Mods backed up to {{cyan:#{updater.backup_filepath}}}")
+          updater.apply_updates!
+          puts CLI::UI.fmt("{{v}} Upgrade to Minecraft version {{bold:#{upgradeable_minecraft_version}}} completed successfully!")
+        rescue => error
+          puts CLI::UI.fmt("{{x}} Failed to apply updates: #{error.message}")
+          choice = CLI::UI.ask('Retry?', options: %w(yes no), default: 'no')
+          if choice == 'yes'
+            begin
+              updater.apply_updates!
+            rescue => error
+              puts CLI::UI.fmt("{{x}} Failed again to apply updates: #{error.message}")
+            end
+          end
+        end
+      end
     end
   end
 

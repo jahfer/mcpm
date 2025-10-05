@@ -14,6 +14,14 @@ module Mods
     :is_platform,
     :optional
   ) do
+    def supported_minecraft_versions(mod_loader: nil)
+      Mods::Modrinth.fetch_supported_versions(project_id, mod_loader: mod_loader)
+    end
+
+    def maximum_supported_minecraft_version(mod_loader: nil)
+      supported_minecraft_versions(mod_loader:).last
+    end
+
     def platform? = is_platform
     def optional? = optional == true
     def required? = !optional?
@@ -27,7 +35,7 @@ module Mods
     :minecraft_version
   ) do
     def supported_minecraft_versions(mod_loader: nil)
-      Mods::Modrinth.fetch_supported_versions(declaration.project_id, mod_loader: mod_loader)
+      declaration.supported_minecraft_versions(mod_loader: mod_loader)
     end
 
     def maximum_supported_minecraft_version(mod_loader: nil)
@@ -109,8 +117,12 @@ module Mods
       end
     end
 
+    def mods_dir
+      @mods_dir ||= File.join(base_dir, 'mods')
+    end
+
     def jar_files
-      @jar_files ||= Dir.glob(File.join(base_dir, 'mods', '*.jar'))
+      @jar_files ||= Dir.glob(File.join(mods_dir, '*.jar'))
     end
 
     def mod_loader
