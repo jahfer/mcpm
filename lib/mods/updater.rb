@@ -41,13 +41,10 @@ module Mods
       destination_path = File.join(working_dir, filename)
 
       begin
-        # Download the file
         Downloader.download_file(download_url, destination_path)
-        
-        # Verify the checksum
-        Downloader.verify_checksum(destination_path, file_hash, mod_declaration.name)
+        Downloader.verify_checksum(destination_path, file_hash)
       rescue Downloader::Error => e
-        raise UpgradeError, e.message
+        raise UpgradeError, "Update failed for mod #{mod_declaration.name}: #{e.message}"
       end
     end
 

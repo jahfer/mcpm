@@ -46,7 +46,7 @@ module Mods
         end
       end
 
-      def verify_checksum(file_path, expected_sha512, mod_name)
+      def verify_checksum(file_path, expected_sha512)
         unless File.exist?(file_path)
           raise ChecksumError, "File does not exist for checksum verification: #{file_path}"
         end
@@ -56,7 +56,7 @@ module Mods
         unless actual_sha512 == expected_sha512
           # Clean up the invalid file
           File.delete(file_path) if File.exist?(file_path)
-          raise ChecksumError, "Checksum verification failed for mod #{mod_name}. Expected: #{expected_sha512}, got: #{actual_sha512}"
+          raise ChecksumError, "Checksum verification failed. Expected: #{expected_sha512}, got: #{actual_sha512}"
         end
       end
     end

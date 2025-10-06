@@ -147,6 +147,10 @@ class Upgrade < CLI::Kit::BaseCommand
         return
       end
 
+      CLI::UI.puts("{{yellow:⚠ Please ensure the server is stopped before applying updates.}}\n")
+      answer = CLI::UI.ask("Proceed to download mods and apply the updates?", options: %w(yes no), default: 'yes')
+      return unless answer == 'yes'
+
       Mods::Updater.attempt_update(config, to_minecraft_version: upgradeable_minecraft_version) do |updater|
         puts CLI::UI.fmt("{{blue:🔧}} Upgrading server to Minecraft version {{bold:#{upgradeable_minecraft_version}}}...")
 
@@ -159,9 +163,9 @@ class Upgrade < CLI::Kit::BaseCommand
           waiting: mods_to_update.dup
         }
 
-        spinner_title = ->() { " Updating mods: {{@widget/status:#{state[:successful].length}:#{state[:failed].length}:#{state[:processing].length}:#{state[:waiting].length}}}" }
+        spinner_title = ->() { " Downloading updated mods: {{@widget/status:#{state[:successful].length}:#{state[:failed].length}:#{state[:processing].length}:#{state[:waiting].length}}}" }
 
-        CLI::UI::Frame.open("Downloading mods") do
+        CLI::UI::Frame.open("Mod Downloads") do
           CLI::UI::Spinner.spin(spinner_title.call) do |spinner|
             mods_to_update.each_with_index do |mod, index|
               state[:waiting].delete(mod)
