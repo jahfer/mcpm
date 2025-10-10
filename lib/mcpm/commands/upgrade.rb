@@ -133,11 +133,11 @@ class Upgrade < CLI::Kit::BaseCommand
         elsif op.force
           puts CLI::UI.fmt("{{yellow:⚠ Forcing upgrade despite not all required mods supporting a Minecraft version newer than {{bold:#{config.minecraft_version}}}.}}")
         else
-          puts CLI::UI.fmt("{{yellow:ℹ No upgrade available, not all required mods support a Minecraft version newer than {{bold:#{config.minecraft_version}}}.}}")
+          puts CLI::UI.fmt("{{yellow:ℹ No upgrade available, some required mods do not support a Minecraft version newer than {{bold:#{config.minecraft_version}}}.}}")
           return
         end
       else
-        puts CLI::UI.fmt("{{yellow:ℹ No upgrade available, not all mods support a Minecraft version newer than {{bold:#{config.minecraft_version}}}.}}")
+        puts CLI::UI.fmt("{{yellow:ℹ No upgrade available, some mods do not support a Minecraft version newer than {{bold:#{config.minecraft_version}}}.}}")
         puts CLI::UI.fmt("{{yellow:  Use {{bold:--ignore-optional}} to check again, ignoring optional mods.}}")
         return
       end
