@@ -12,5 +12,7 @@ module MCPM
     register :Upgrade, 'upgrade', 'mcpm/commands/upgrade'
     register :Format, 'fmt', 'mcpm/commands/format'
     register :Add, 'add', 'mcpm/commands/add'
+    register :Update, 'update', 'mcpm/commands/update'
+    register :Install, 'install', 'mcpm/commands/install'
   end
 end

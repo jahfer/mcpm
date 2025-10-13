@@ -8,12 +8,13 @@ class Format < CLI::Kit::BaseCommand
     Formats the MCPM YAML configuration file in the specified directory
     (or the current directory if none is specified).
   LONGDESC
-  usage('[dir]')
-  example('my-world', "format the MCPM YAML configuration file for the 'my-world' server")
+  usage('')
+  example('', "format the MCPM YAML configuration file for the 'my-world' server")
 
   class Opts < CLI::Kit::Opts
     def dir
-      File.expand_path(position(default: Dir.pwd))
+      path = option!(long: '--dir', short: '-d', desc: 'Directory containing the MCPM configuration file', default: Dir.pwd)
+      File.expand_path(path)
     end
   end
   

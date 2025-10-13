@@ -11,7 +11,8 @@ class Add < CLI::Kit::BaseCommand
 
   class Opts < CLI::Kit::Opts
     def dir
-      File.expand_path(position(default: Dir.pwd))
+      path = option!(long: '--dir', short: '-d', desc: 'Directory containing the MCPM configuration file', default: Dir.pwd)
+      File.expand_path(path)
     end
 
     def query

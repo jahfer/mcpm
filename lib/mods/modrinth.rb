@@ -46,6 +46,12 @@ module Mods
         end
       end
 
+      def fetch_available_versions(project_id, minecraft_version: nil, mod_loader: nil)
+        fetch_versions_response(project_id, minecraft_version:, mod_loader:).map do |v|
+          VersionInfo.new(v.fetch("version_number"), MinecraftVersion.new(v.fetch("game_versions").first))
+        end
+      end
+
       def remote_file_for_mod(project_id:, minecraft_version: nil, mod_loader: nil)
         selected_version = fetch_versions_response(project_id, minecraft_version:, mod_loader:).first
 

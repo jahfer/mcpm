@@ -89,6 +89,16 @@ module Mods
       @mod_declarations ||= load_mod_declarations
     end
 
+    def find_installed_mod_by_id(mod_id)
+      declaration = mod_declarations.find { |mod| mod.project_id.casecmp?(mod_id) }
+      declaration && find_installed_mod(declaration)
+    end
+
+    def find_installed_mod_by_name(mod_name)
+      declaration = mod_declarations.find { |mod| mod.name.casecmp?(mod_name) }
+      declaration && find_installed_mod(declaration)
+    end
+
     def to_h
       config_data
     end
@@ -108,6 +118,22 @@ module Mods
       @dependents_of[declaration.project_id] ||= begin
         mod_declarations.select { |decl| decl.depends_on.include?(declaration.project_id) }
       end
+    end
+
+    def next_available_version(mod_declaration)
+      supported_versions = Modrinth.fetch_available_versions(
+        mod_declaration.project_id,
+        mod_loader:,
+        minecraft_version:
+      )
+
+      supported_versions.first.version
+    end
+
+    def can_update?(installed_mod)
+      # TODO: Version comparison with installed is shoddy, e.g.:
+      # > Mod 'Open Parties and Claims' can be updated from 0.25.7 to fabric-1.21.10-0.25.7.
+      next_available_version(installed_mod.declaration) != installed_mod.version
     end
 
     def find_installed_mod(mod_declaration)
@@ -142,6 +168,24 @@ module Mods
       Utility::YAML.dump_to_file(new_config, filepath: File.join(base_dir, YAML_CONFIG_FILE))
     end
 
+    def install_mod!(mod_declaration)
+      updater = Mods::Updater.new(self, mods_dir, minecraft_version)
+      updater.download_mod(mod_declaration)
+      
+       # Invalidate cache
+      @mod_declarations = nil
+      @config_data = nil
+    end
+
+    def update_mod!(installed_mod)
+      unless find_installed_mod(installed_mod.declaration)
+        raise MissingModError, "Mod #{installed_mod.declaration.name} not installed"
+      end
+      
+      install_mod!(installed_mod.declaration) if can_update?(installed_mod)
+      FileUtils.remove([installed_mod.filepath])
+    end
+
     def add_mod!(mod_declaration)
       if mod_declarations.find { |mod| mod.project_id == mod_declaration.project_id }
         raise DeclarationError, "Mod `#{mod_declaration.name}` already in configuration"
@@ -150,14 +194,9 @@ module Mods
       new_config = config_data.dup
       new_config['mods'] << mod_declaration.to_h
 
-       # Invalidate cache
-      @mod_declarations = nil
-      @config_data = nil
-
       Utility::YAML.dump_to_file(new_config, filepath: File.join(base_dir, YAML_CONFIG_FILE))
 
-      updater = Mods::Updater.new(self, mods_dir, minecraft_version)
-      updater.download_mod(mod_declaration)
+      install_mod!(mod_declaration)
     end
 
     private
@@ -197,7 +236,7 @@ module Mods
             minecraft_version: json_data.dig('depends', 'minecraft')
           )
         end
-      rescue => e
+      rescue
         UNKNOWN_VERSION
       end
     end
