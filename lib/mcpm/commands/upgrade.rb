@@ -13,7 +13,7 @@ class Upgrade < CLI::Kit::BaseCommand
 
   class Opts < CLI::Kit::Opts
     def dir
-      File.expand_path(position!)
+      File.expand_path(position(default: Dir.pwd))
     end
 
     def dry_run
@@ -35,18 +35,28 @@ class Upgrade < CLI::Kit::BaseCommand
     missing_mods = nil
 
     CLI::UI::Frame.open("Mod Discovery") do
-      puts CLI::UI.fmt("{{blue:🔍}} Loading mod configuration and discovering installed mods...")
-      config = mod_config(op.dir)
-      mod_declarations = load_mod_declarations(config)
-      puts CLI::UI.fmt("{{green:✓}} Loaded configuration for {{bold:#{mod_declarations.length}}} mod(s)")
-      load_mod_installations(config) => { installed_mods:, missing_mods:, undeclared_mods: }
+      puts CLI::UI.fmt("Looking for Minecraft configuration at {{bold:#{op.dir}}}")
+      config = nil
 
+      CLI::UI::Spinner.spin("Loading mod configuration...") do |spinner|
+        config = mod_config(op.dir)
+        mod_declarations = load_mod_declarations(config)
+        spinner.update_title("Loaded configuration for {{bold:#{mod_declarations.length}}} mod(s)")
+      end
+
+      mod_installations = nil
+      CLI::UI::Spinner.spin("Evaluating installed mods...") do |spinner|
+        mod_installations = load_mod_installations(config)
+        spinner.update_title("Found {{bold:#{mod_installations[:installed_mods].length}}} installed mod(s), {{bold:#{mod_installations[:missing_mods].length}}} missing mod(s)")
+      end
+
+      mod_installations => { installed_mods:, missing_mods:, undeclared_mods: }
       if undeclared_mods.any?
         puts CLI::UI.fmt("\n{{yellow:⚠ Unmanaged JAR files found in mods directory:}}")
         undeclared_mods.each do |jar|
           puts CLI::UI.fmt("  {{yellow:•}} #{File.basename(jar)}")
         end
-        puts CLI::UI.fmt("{{yellow:💡 These files do not match any configured mod patterns.}}")
+        puts CLI::UI.fmt("{{gray:💡 These files do not match any configured mod patterns.}}")
       end
     rescue Mods::ModConfig::DeclarationError => e
       puts CLI::UI.fmt("{{red:Error loading mod configuration: #{e.message}")
@@ -177,7 +187,7 @@ class Upgrade < CLI::Kit::BaseCommand
               success = false
               
               begin
-                updater.update_mod(mod)
+                updater.download_mod(mod)
                 success = true
               rescue Mods::Modrinth::NotFoundError => e
                 puts CLI::UI.fmt("{{yellow:⚠}} Could not find an updated version for mod {{cyan:#{mod.name}}}: #{e.message}")
@@ -217,6 +227,7 @@ class Upgrade < CLI::Kit::BaseCommand
           updater.backup_existing_mods
           puts CLI::UI.fmt("{{v}} Mods backed up to {{cyan:#{updater.backup_filepath}}}")
           updater.apply_updates!
+          config.update_game_version!(upgradeable_minecraft_version)
           puts CLI::UI.fmt("{{v}} Upgrade to Minecraft version {{bold:#{upgradeable_minecraft_version}}} completed successfully!")
         rescue => error
           puts CLI::UI.fmt("{{x}} Failed to apply updates: #{error.message}")

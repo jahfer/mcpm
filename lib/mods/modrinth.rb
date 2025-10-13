@@ -47,9 +47,17 @@ module Mods
       end
 
       def remote_file_for_mod(project_id:, minecraft_version: nil, mod_loader: nil)
-        available_version = fetch_versions_response(project_id, minecraft_version:, mod_loader:).first
-        response = fetch_version_response(available_version.fetch("id"))
-        response.fetch("files", []).first
+        selected_version = fetch_versions_response(project_id, minecraft_version:, mod_loader:).first
+
+        if selected_version
+          response = fetch_version_response(selected_version.fetch("id"))
+          response.fetch("files", []).first
+        else
+          alternate_version = MinecraftVersion.compatible_version(minecraft_version)
+          raise NotFoundError, "No versions found for project #{project_id} with specified filters" unless alternate_version
+
+          return remote_file_for_mod(project_id:, minecraft_version: alternate_version, mod_loader:)
+        end
       end
 
       private
@@ -63,8 +71,8 @@ module Mods
         uri = URI("#{API_BASE_URL}/project/#{project_id}/version")
 
         params = {}
-        params['game_versions'] = minecraft_version if minecraft_version
-        params['loaders'] = mod_loader if mod_loader
+        params['game_versions'] = JSON.generate([minecraft_version]) if minecraft_version
+        params['loaders'] = JSON.generate([mod_loader]) if mod_loader
 
         http_get(uri, params)
       end

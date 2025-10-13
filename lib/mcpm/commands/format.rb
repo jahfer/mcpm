@@ -13,7 +13,7 @@ class Format < CLI::Kit::BaseCommand
 
   class Opts < CLI::Kit::Opts
     def dir
-      File.expand_path(position!)
+      File.expand_path(position(default: Dir.pwd))
     end
   end
   

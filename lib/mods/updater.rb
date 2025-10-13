@@ -26,7 +26,7 @@ module Mods
       self.backup_filepath = nil
     end
 
-    def update_mod(mod_declaration)
+    def download_mod(mod_declaration)
       file = Modrinth.remote_file_for_mod(
         project_id: mod_declaration.project_id,
         minecraft_version: to_minecraft_version,
@@ -43,6 +43,7 @@ module Mods
       begin
         Downloader.download_file(download_url, destination_path)
         Downloader.verify_checksum(destination_path, file_hash)
+        destination_path
       rescue Downloader::Error => e
         raise UpgradeError, "Update failed for mod #{mod_declaration.name}: #{e.message}"
       end
@@ -52,8 +53,8 @@ module Mods
       raise UpgradeError, "Cannot apply updates after a failed update" if failed? && !force
 
       backup_existing_mods unless backed_up?
-
-      FileUtils.cp_r(working_dir, config.mods_dir, remove_destination: true)
+      FileUtils.rm_rf(config.mods_dir)
+      FileUtils.copy_entry(working_dir, config.mods_dir)
     end
 
     def backup_existing_mods

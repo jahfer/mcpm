@@ -1,5 +1,9 @@
 MinecraftVersion = Data.define(:version_number) do
   class << self 
+    def compatible_version(version)
+      PATCHFIX_VERSIONS.rassoc(version)
+    end
+
     def latest_version_supported(*lists)
       return nil if lists.empty?
       return lists.first.max if lists.size == 1

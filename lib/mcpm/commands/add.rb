@@ -11,7 +11,7 @@ class Add < CLI::Kit::BaseCommand
 
   class Opts < CLI::Kit::Opts
     def dir
-      File.expand_path(position!)
+      File.expand_path(position(default: Dir.pwd))
     end
 
     def query
@@ -30,7 +30,7 @@ class Add < CLI::Kit::BaseCommand
     )
 
     mod = choose(config, results)
-    config.add_mod(mod)
+    config.add_mod!(mod)
   end
 
   private
@@ -78,7 +78,7 @@ class Add < CLI::Kit::BaseCommand
       project_id: selected_mod.fetch('project_id'),
       name: selected_mod.fetch('title'),
       type: mod_type,
-      filename_pattern: "#{filename_pattern}*\\.jar$",
+      filename_pattern: "#{filename_pattern}.*\\.jar$",
       depends_on: [], # TODO
       is_platform: false,
       optional: false

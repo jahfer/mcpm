@@ -4,6 +4,7 @@ require 'json'
 require 'mods/modrinth'
 require 'mods/minecraft_version'
 require 'utility/yaml'
+require 'mods/updater'
 
 module Mods
   ModDeclaration = Data.define(
@@ -71,7 +72,10 @@ module Mods
     end
 
     def mod_loader
-      config_data['mod_loader'] || 'fabric'
+      loader = config_data['loader']
+      raise DeclarationError, "Missing 'loader' in #{YAML_CONFIG_FILE}" unless loader
+
+      loader.downcase
     end
 
     def minecraft_version
@@ -128,7 +132,17 @@ module Mods
       end
     end
 
-    def add_mod(mod_declaration)
+    def update_game_version!(new_version)
+      new_config = config_data.dup
+      new_config['minecraft_version'] = new_version.to_s
+
+       # Invalidate cache
+      @config_data = nil
+
+      Utility::YAML.dump_to_file(new_config, filepath: File.join(base_dir, YAML_CONFIG_FILE))
+    end
+
+    def add_mod!(mod_declaration)
       if mod_declarations.find { |mod| mod.project_id == mod_declaration.project_id }
         raise DeclarationError, "Mod `#{mod_declaration.name}` already in configuration"
       end
@@ -141,6 +155,9 @@ module Mods
       @config_data = nil
 
       Utility::YAML.dump_to_file(new_config, filepath: File.join(base_dir, YAML_CONFIG_FILE))
+
+      updater = Mods::Updater.new(self, mods_dir, minecraft_version)
+      updater.download_mod(mod_declaration)
     end
 
     private
