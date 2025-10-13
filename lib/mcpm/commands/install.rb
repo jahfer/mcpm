@@ -35,7 +35,7 @@ class Install < CLI::Kit::BaseCommand
       end
 
       if missing_mods.empty?
-        puts CLI::UI.fmt("{{green:All mods are already installed.}}")
+        puts CLI::UI.fmt("\n{{green:All mods are already installed.}}")
         return
       else
         puts CLI::UI.fmt("\n{{yellow:Found #{missing_mods.size} missing mod(s) to install.}}")
