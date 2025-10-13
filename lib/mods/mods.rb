@@ -3,6 +3,7 @@ require 'zip'
 require 'json'
 require 'mods/modrinth'
 require 'mods/minecraft_version'
+require 'utility/yaml'
 
 module Mods
   ModDeclaration = Data.define(
@@ -25,6 +26,10 @@ module Mods
     def platform? = is_platform
     def optional? = optional == true
     def required? = !optional?
+
+    def to_h
+      super { |name, val| [name.to_s, val] }
+    end
   end
 
   InstalledMod = Data.define(
@@ -33,19 +38,7 @@ module Mods
     :filename,
     :filepath,
     :minecraft_version
-  ) do
-    def supported_minecraft_versions(mod_loader: nil)
-      declaration.supported_minecraft_versions(mod_loader: mod_loader)
-    end
-
-    def maximum_supported_minecraft_version(mod_loader: nil)
-      supported_minecraft_versions(mod_loader:).last
-    end
-
-    def platform? = declaration.platform?
-    def optional? = declaration.optional?
-    def required? = !optional?
-  end
+  )
 
   VersionInfo = Data.define(
     :version,
@@ -55,6 +48,8 @@ module Mods
   UNKNOWN_VERSION = VersionInfo.new(nil, nil)
   
   class ModConfig
+    YAML_CONFIG_FILE = 'mcpm.yml'
+
     Error = Class.new(StandardError)
     DeclarationError = Class.new(Error)
     MissingModError = Class.new(Error)
@@ -67,15 +62,31 @@ module Mods
       self.base_dir = base_dir
     end
 
+    def mods_dir
+      @mods_dir ||= File.join(base_dir, 'mods')
+    end
+
+    def jar_files
+      @jar_files ||= Dir.glob(File.join(mods_dir, '*.jar'))
+    end
+
+    def mod_loader
+      config_data['mod_loader'] || 'fabric'
+    end
+
     def minecraft_version
       version = config_data['minecraft_version']
-      raise DeclarationError, "Missing 'minecraft_version' in mcpm.yml" unless version
+      raise DeclarationError, "Missing 'minecraft_version' in #{YAML_CONFIG_FILE}" unless version
 
       MinecraftVersion.new(version)
     end
 
     def mod_declarations
       @mod_declarations ||= load_mod_declarations
+    end
+
+    def to_h
+      config_data
     end
 
     def dependents_of(mod)
@@ -100,7 +111,7 @@ module Mods
       matching_jars = jar_files.select { |jar| File.basename(jar) =~ pattern }
 
       if matching_jars.empty?
-        raise MissingModError, "No installed JAR file matches pattern for mod: #{mod_declaration.name}"
+        raise MissingModError, "#{mod_declaration.name} JAR file not found (#{mod_declaration.filename_pattern})"
       elsif matching_jars.size > 1
         raise AmbiguousModError, "Multiple JAR files match pattern for mod: #{mod_declaration.name} (#{matching_jars.map { |j| File.basename(j) }.join(', ')})"
       else
@@ -117,16 +128,19 @@ module Mods
       end
     end
 
-    def mods_dir
-      @mods_dir ||= File.join(base_dir, 'mods')
-    end
+    def add_mod(mod_declaration)
+      if mod_declarations.find { |mod| mod.project_id == mod_declaration.project_id }
+        raise DeclarationError, "Mod `#{mod_declaration.name}` already in configuration"
+      end
 
-    def jar_files
-      @jar_files ||= Dir.glob(File.join(mods_dir, '*.jar'))
-    end
+      new_config = config_data.dup
+      new_config['mods'] << mod_declaration.to_h
 
-    def mod_loader
-      config_data['mod_loader'] || 'fabric'
+       # Invalidate cache
+      @mod_declarations = nil
+      @config_data = nil
+
+      Utility::YAML.dump_to_file(new_config, filepath: File.join(base_dir, YAML_CONFIG_FILE))
     end
 
     private
@@ -135,9 +149,9 @@ module Mods
 
     def config_data
       @config_data ||= begin
-        yaml = File.join(base_dir, 'mcpm.yml')
+        yaml = File.join(base_dir, YAML_CONFIG_FILE)
         unless File.exist?(yaml)
-          puts "No mcpm.yml found in #{base_dir}"
+          puts "No #{YAML_CONFIG_FILE} found in #{base_dir}"
           exit 1
         end
 

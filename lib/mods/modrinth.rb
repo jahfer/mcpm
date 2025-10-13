@@ -11,18 +11,24 @@ module Mods
     class APIError < Error; end
 
     class << self
+      def search_projects(query, limit: 10, minecraft_version:, mod_loader:)
+        uri = URI("#{API_BASE_URL}/search")
+        filters = {
+          project_type: "mod",
+          categories: mod_loader,
+          versions: minecraft_version
+        }
+
+        facets = JSON.generate(filters.map { |k, v| Array("#{k}:#{v}") })
+        params = { query:, limit:, facets: }
+        
+        response = http_get(uri, params)
+        response.fetch("hits", [])
+      end
+
       def fetch_project(project_id)
         uri = URI("#{API_BASE_URL}/project/#{project_id}")
-        response = http_get(uri)
-
-        case response.code
-        when 200
-          JSON.parse(response.body.to_s)
-        when 404
-          raise NotFoundError, "Project with ID #{project_id} not found"
-        else
-          raise APIError, "Modrinth API error: #{response.code} - #{response.body.to_s}"
-        end
+        http_get(uri)
       end
 
       def fetch_supported_versions(project_id, minecraft_version: nil, mod_loader: nil)
@@ -50,41 +56,17 @@ module Mods
 
       def fetch_version_response(version_id)
         uri = URI("#{API_BASE_URL}/version/#{version_id}")
-        response = http_get(uri)
-
-        case response.code.to_i
-        when 200
-          JSON.parse(response.body.to_s)
-        when 404
-          raise NotFoundError, "Version with ID #{version_id} not found"
-        else
-          raise APIError, "Modrinth API error: #{response.code} - #{response.body.to_s}"
-        end
+        http_get(uri)
       end
 
       def fetch_versions_response(project_id, minecraft_version: nil, mod_loader: nil)
-        @version_response_cache ||= {}
-        cache_key = "#{project_id}_#{minecraft_version}_#{mod_loader}"
+        uri = URI("#{API_BASE_URL}/project/#{project_id}/version")
 
-        response = @version_response_cache[cache_key] ||= begin
-          uri = URI("#{API_BASE_URL}/project/#{project_id}/version")
+        params = {}
+        params['game_versions'] = minecraft_version if minecraft_version
+        params['loaders'] = mod_loader if mod_loader
 
-          params = {}
-          params['game_versions'] = minecraft_version if minecraft_version
-          params['loaders'] = mod_loader if mod_loader
-
-          response = http_get(uri, params)
-        end
-
-        case response.code.to_i
-        when 200
-          JSON.parse(response.body.to_s)
-        when 404
-          raise NotFoundError, "Project with ID #{project_id} not found"
-        else
-          @version_response_cache.delete(cache_key)
-          raise APIError, "Modrinth API error: #{response.code} - #{response.body.to_s}"
-        end
+        http_get(uri, params)
       end
 
       private
@@ -92,9 +74,25 @@ module Mods
       def http_get(uri, params = {})
         http = Net::HTTP.new(uri.host, uri.port)
         http.use_ssl = true
+
+        uri.query = URI.encode_www_form(params) unless params.empty?
+
+        puts "GET #{uri}" if ENV['MCPM_DEBUG']
+
         request = Net::HTTP::Get.new(uri)
         request['User-Agent'] = 'mcpm/0.1'
-        http.request(request)
+        response = http.request(request)
+
+        case response.code.to_i
+        when 200
+          JSON.parse(response.body)
+        when 404
+          raise NotFoundError, "Resource not found at #{uri}"
+        when 429
+          raise APIError, "Rate limited by Modrinth API"
+        else
+          raise APIError, "Modrinth API error: #{response.code} - #{response.body.to_s}"
+        end
       end
     end
   end

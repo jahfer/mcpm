@@ -59,10 +59,12 @@ class Upgrade < CLI::Kit::BaseCommand
     latest_common_version = nil
     required_supported_minecraft_versions = []
 
+    managed_mods = installed_mods.map(&:declaration) + missing_mods
+
     CLI::UI::Frame.open("Maximum Minecraft Version Analysis") do
       puts CLI::UI.fmt("{{blue:🔍}} Analyzing maximum Minecraft version support across all mods...")
 
-      if installed_mods.empty?
+      if managed_mods.empty?
         puts CLI::UI.fmt("{{yellow:⚠}} No mods found, cannot determine maximum Minecraft version")
         exit 1
       end
@@ -70,8 +72,8 @@ class Upgrade < CLI::Kit::BaseCommand
       supported_minecraft_versions = []
       max_minecraft_version_seen = nil
       CLI::UI::Progress.progress do |bar|
-        supported_minecraft_versions = installed_mods.map.with_index do |mod, index|
-          bar.tick(set_percent: (index + 1).to_f / installed_mods.length)
+        supported_minecraft_versions = managed_mods.map.with_index do |mod, index|
+          bar.tick(set_percent: (index + 1).to_f / managed_mods.length)
           
           latest_supported_version = mod.maximum_supported_minecraft_version(mod_loader: config.mod_loader)
           max_minecraft_version_seen = latest_supported_version if max_minecraft_version_seen.nil? || (latest_supported_version && (max_minecraft_version_seen < latest_supported_version))
@@ -86,16 +88,15 @@ class Upgrade < CLI::Kit::BaseCommand
         end
       end
 
-      common_versions = supported_minecraft_versions.reduce(:&)
-      if common_versions.nil? || common_versions.empty?
+      latest_common_version = MinecraftVersion.latest_version_supported(*supported_minecraft_versions)
+      if latest_common_version.nil?
         puts CLI::UI.fmt("{{red:✗}} No common Minecraft version found across all managed mods.")
         return
       end
 
-      latest_common_version = common_versions.sort.last
-      puts CLI::UI.fmt("\n{{blue:ℹ}} Highest release version any mod supports: {{bold:#{latest_common_version}}}")
+      puts CLI::UI.fmt("\n{{blue:ℹ}} Highest release version all mods supports: {{bold:#{latest_common_version}}}")
 
-      installed_mods
+      managed_mods
         .group_by { |mod| mod.maximum_supported_minecraft_version(mod_loader: config.mod_loader) }
         .each_pair
         .sort_by(&:first)
@@ -107,16 +108,17 @@ class Upgrade < CLI::Kit::BaseCommand
           end
 
           puts CLI::UI.fmt("\n{{#{version_color}:📌 Minecraft #{version}:}} (#{mods.length} mod#{'s' if mods.length != 1})")
+          puts CLI::UI.fmt("{{gray:   Compatible with Minecraft version #{version.normalized}}}") if version.patchfixed?
           mods.sort_by { |mod| -config.dependents_of(mod).length }.each do |mod|
-            type_label = mod.declaration.type == :server_only ? 'Server-Only' : 'Client+Server'
-            type_color = mod.declaration.type == :server_only ? 'green' : 'blue'
+            type_label = mod.type == :server_only ? 'Server-Only' : 'Client+Server'
+            type_color = mod.type == :server_only ? 'green' : 'blue'
             platform_indicator = mod.platform? ? ' {{yellow:[PLATFORM]}}' : ''
 
             dependents_count = config.dependents_of(mod).length
             dependents_info =  dependents_count > 0 ? " {{gray:(#{dependents_count} dependent#{'s' if dependents_count != 1})}}" : ''
             optional_indicator = mod.optional? ? ' {{gray:[OPTIONAL]}}' : ''
 
-            puts CLI::UI.fmt("  {{gray:•}} {{cyan:#{mod.declaration.name}}} ({{#{type_color}:#{type_label}}})#{platform_indicator}#{dependents_info}#{optional_indicator}")
+            puts CLI::UI.fmt("  {{gray:•}} {{cyan:#{mod.name}}} ({{#{type_color}:#{type_label}}})#{platform_indicator}#{dependents_info}#{optional_indicator}")
           end
       end
     end
@@ -124,9 +126,9 @@ class Upgrade < CLI::Kit::BaseCommand
     upgradeable_minecraft_version = latest_common_version
     CLI::UI::Frame.open("Upgrade Minecraft") do
       if latest_common_version > config.minecraft_version
-        puts CLI::UI.fmt("\n{{green:🎉 An upgrade is available to Minecraft version #{latest_common_version}!}}")
+        puts CLI::UI.fmt("{{green:🎉 An upgrade is available to Minecraft {{bold:#{latest_common_version}}}!}}")
       elsif op.ignore_optional
-        required_common_version = required_supported_minecraft_versions.reduce(:&).sort.last
+        required_common_version = MinecraftVersion.latest_version_supported(*required_supported_minecraft_versions)
         if required_common_version && required_common_version > config.minecraft_version
           upgradeable_minecraft_version = required_common_version
           puts CLI::UI.fmt("{{green:🚀 Ignoring optional mods, the server can be upgraded to {{bold:#{required_common_version}}}!}}")

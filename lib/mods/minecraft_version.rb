@@ -1,7 +1,18 @@
 MinecraftVersion = Data.define(:version_number) do
+  class << self 
+    def latest_version_supported(*lists)
+      return nil if lists.empty?
+      return lists.first.max if lists.size == 1
+      
+      lists.reduce do |common, list|
+        common.flat_map { |v1| list.select { |v2| v1 == v2 } }.uniq
+      end.max.normalized
+    end
+  end
+
   def <=>(other)
-    self_parts = version_number.split('.').map(&:to_i)
-    other_parts = other.version_number.split('.').map(&:to_i)
+    self_parts = normalized.version_number.split('.').map(&:to_i)
+    other_parts = other.normalized.version_number.split('.').map(&:to_i)
 
     self_parts <=> other_parts
   end
@@ -25,4 +36,16 @@ MinecraftVersion = Data.define(:version_number) do
   def to_s
     version_number
   end
+
+  def normalized
+    PATCHFIX_VERSIONS.fetch(self, self)
+  end
+
+  def patchfixed?
+    PATCHFIX_VERSIONS.key?(self)
+  end
 end
+
+PATCHFIX_VERSIONS = {
+  MinecraftVersion['1.21.9'] => MinecraftVersion['1.21.10'],
+}.freeze
