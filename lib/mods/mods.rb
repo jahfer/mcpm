@@ -127,7 +127,16 @@ module Mods
         minecraft_version:
       )
 
-      supported_versions.first.version
+      if supported_versions.empty?
+        alternate_version = MinecraftVersion.compatible_version(minecraft_version)
+        supported_versions = Modrinth.fetch_available_versions(
+          mod_declaration.project_id,
+          mod_loader:,
+          minecraft_version: alternate_version
+        ) if alternate_version
+      end
+
+      supported_versions.first&.version
     end
 
     def can_update?(installed_mod)
