@@ -31,7 +31,7 @@ class Outdated < CLI::Kit::BaseCommand
           latest_version = mod_config.next_available_version(mod_decl)
 
           installed_version = begin  
-            installed_mod = mod_config.find_installed_mod(mod_decl)
+            mod_config.find_installed_mod(mod_decl).version
           rescue Mods::ModConfig::MissingModError
             "?"
           end
