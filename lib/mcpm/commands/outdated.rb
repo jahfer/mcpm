@@ -24,36 +24,38 @@ class Outdated < CLI::Kit::BaseCommand
     mod_versions = {}
     
     CLI::UI::Frame.open("Checking for outdated mods") do
-      CLI::UI::Progress.progress do |bar|
-        mod_config.mod_declarations.each_with_index do |mod_decl, index|
-          bar.tick(set_percent: (index + 1).to_f / mod_config.mod_declarations.length)
+      CLI::UI::Spinner.spin("Checking...") do |spinner|
+        Ori.sync do |scope|
+          scope.fork_each(mod_config.mod_declarations) do |mod_decl|
+            latest_version = mod_config.next_available_version(mod_decl)
 
-          latest_version = mod_config.next_available_version(mod_decl)
+            installed_version = begin  
+              mod_config.find_installed_mod(mod_decl).version
+            rescue Mods::ModConfig::MissingModError
+              "?"
+            end
 
-          installed_version = begin  
-            mod_config.find_installed_mod(mod_decl).version
-          rescue Mods::ModConfig::MissingModError
-            "?"
-          end
-
-          if latest_version && latest_version != installed_version
-            mod_versions[mod_decl.name] = [latest_version, installed_version]
-            outdated_mods << mod_decl
+            if latest_version && latest_version != installed_version
+              mod_versions[mod_decl.name] = [latest_version, installed_version]
+              outdated_mods << mod_decl
+            end
           end
         end
-      end
 
+        spinner.update_title("{{green:Version check complete.}}")
+      end
+    end
+
+    CLI::UI::Frame.open("Summary") do
       if outdated_mods.empty?
-        puts CLI::UI.fmt("\n{{green:All mods are up to date.}}")
-        return
+        puts CLI::UI.fmt("{{green:All mods are up to date.}}")
       else
-        puts CLI::UI.fmt("\n{{yellow:Found #{outdated_mods.size} outdated mod(s):}}")
+        puts CLI::UI.fmt("{{yellow:Found #{outdated_mods.size} outdated mod(s):}}")
         outdated_mods.each do |mod_decl|
           latest_version, installed_version = mod_versions.fetch(mod_decl.name, ["not installed", "not installed"])
           puts CLI::UI.fmt("  * {{bold:#{mod_decl.name}}} ({{green:#{latest_version}}} > {{cyan:#{installed_version}}})")
         end
       end
-
     end
   end
 
