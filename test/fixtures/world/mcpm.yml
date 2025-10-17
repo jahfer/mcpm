@@ -1,0 +1,135 @@
+---
+minecraft_version: 1.21.8
+loader: fabric
+auto_backup: true
+max_backups: 5
+mods:
+  - project_id: P7dR8mSH
+    name: Fabric API
+    type: client_and_server
+    filename_pattern: fabric-api.*\.jar$
+    is_platform: true
+
+  - project_id: qQyHxfxd
+    name: No Chat Reports
+    type: client_and_server
+    filename_pattern: NoChatReports-FABRIC.*\.jar$
+    depends_on: []
+    optional: true
+
+  - project_id: OhduvhIc
+    name: Veinminer
+    type: server_only
+    filename_pattern: Veinminer.*\.jar$
+    depends_on:
+      - P7dR8mSH
+      - aTaCgKLW
+      - Ha28R6CL
+
+  - project_id: NcUtCpym
+    name: Xaero's World Map
+    type: client_and_server
+    filename_pattern: XaerosWorldMap.*\.jar$
+    depends_on: []
+
+  - project_id: ftdbN0KK
+    name: BadPackets
+    type: client_and_server
+    filename_pattern: badpackets-fabric.*\.jar$
+    depends_on: []
+    is_platform: true
+
+  - project_id: MBAkmtvl
+    name: Balm
+    type: client_and_server
+    filename_pattern: balm-fabric.*\.jar$
+    is_platform: true
+
+  - project_id: mTI5Xg5F
+    name: Copper Hopper
+    type: client_and_server
+    filename_pattern: copperhopper.*\.jar$
+    depends_on: []
+
+  - project_id: 6VdDUivB
+    name: Essential Commands
+    type: server_only
+    filename_pattern: essential_commands.*\.jar$
+    depends_on: []
+
+  - project_id: kieAM9Us
+    name: Graves
+    type: client_and_server
+    filename_pattern: graves.*\.jar$
+    depends_on: []
+
+  - project_id: gvQqBUqZ
+    name: Lithium
+    type: client_and_server
+    filename_pattern: lithium-fabric.*\.jar$
+    depends_on: []
+
+  - project_id: xGdtZczs
+    name: Polymer
+    type: server_only
+    filename_pattern: polymer-bundled.*\.jar$
+    is_platform: true
+
+  - project_id: aTaCgKLW
+    name: Silk
+    type: client_and_server
+    filename_pattern: silk-all.*\.jar$
+    is_platform: true
+
+  - project_id: l6YH9Als
+    name: Spark
+    type: server_only
+    filename_pattern: spark.*\.jar$
+    depends_on: []
+
+  - project_id: LOpKHB2A
+    name: Waystones
+    type: client_and_server
+    filename_pattern: waystones-fabric.*\.jar$
+    depends_on:
+      - MBAkmtvl
+
+  - project_id: 6AQIaxuO
+    name: WTHIT
+    type: client_and_server
+    filename_pattern: wthit-fabric.*\.jar$
+    depends_on:
+      - P7dR8mSH
+      - ftdbN0KK
+      - xGdtZczs
+
+  - project_id: LVN9ygNV
+    name: Ledger
+    type: server_only
+    filename_pattern: ledger.*\.jar$
+    depends_on:
+      - Ha28R6CL
+
+  - project_id: Ha28R6CL
+    name: Fabric Language Kotlin
+    type: server_only
+    filename_pattern: fabric-language-kotlin.*\.jar$
+    is_platform: true
+
+  - project_id: gF3BGWvG
+    name: Open Parties and Claims
+    type: client_and_server
+    filename_pattern: open-parties-and-claims-fabric-.*\.jar$
+    depends_on:
+      - ohNO6lps
+      - P7dR8mSH
+    is_platform: false
+    optional: false
+
+  - project_id: ohNO6lps
+    name: Forge Config API Port
+    type: client_and_server
+    filename_pattern: ForgeConfigAPIPort-v.*\.jar$
+    depends_on: []
+    is_platform: false
+    optional: false

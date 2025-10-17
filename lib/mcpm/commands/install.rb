@@ -1,4 +1,5 @@
 require "mods/mods"
+require "ori"
 
 class Install < CLI::Kit::BaseCommand
   command_name('install')
@@ -43,15 +44,41 @@ class Install < CLI::Kit::BaseCommand
 
     end
 
-    CLI::UI::Frame.open("Installing #{missing_mods.size} mod(s)") do
-      missing_mods.each_with_index do |mod_decl, index|
-        CLI::UI::Spinner.spin("Installing '#{mod_decl.name}' (#{index + 1}/#{missing_mods.size})") do |spinner|
-          begin
-            mod_config.install_mod!(mod_decl)
-            spinner.update_title("{{green:Installed '#{mod_decl.name}' successfully.}}")
-          rescue StandardError => e
-            spinner.update_title("{{red:Failed to install '#{mod_decl.name}': #{e.message}}}")
+    CLI::UI::Frame.open("Installing mods") do
+      state = {
+        successful: [],
+        failed: [],
+        processing: [],
+        waiting: missing_mods.dup,
+      }
+      
+      spinner_title = ->() { " Installing... {{@widget/status:#{state[:successful].length}:#{state[:failed].length}:#{state[:processing].length}:#{state[:waiting].length}}}" }
+
+      CLI::UI::Spinner.spin(spinner_title.call) do |spinner|
+        Ori.sync do |scope|
+          scope.fork_each(missing_mods) do |mod_decl|
+            begin
+              state[:processing] << mod_decl
+              state[:waiting].delete(mod_decl)
+              spinner.update_title(spinner_title.call)
+              # sleep(rand(1..5))
+              mod_config.install_mod!(mod_decl)
+              spinner.update_title("{{green:Installed '#{mod_decl.name}' successfully.}}")
+              state[:successful] << mod_decl
+            rescue StandardError => e
+              spinner.update_title("{{red:Failed to install '#{mod_decl.name}': #{e.message}}}")
+              state[:failed] << mod_decl
+            ensure
+              state[:processing].delete(mod_decl)
+              spinner.update_title(spinner_title.call)
+            end
           end
+        end
+
+        if state[:failed].empty?
+          spinner.update_title("{{green:All mods installed successfully.}}")
+        else
+          spinner.update_title("{{red:Some mods failed to install.}}")
         end
       end
     end

@@ -14,5 +14,6 @@ module MCPM
     register :Add, 'add', 'mcpm/commands/add'
     register :Update, 'update', 'mcpm/commands/update'
     register :Install, 'install', 'mcpm/commands/install'
+    register :Outdated, 'outdated', 'mcpm/commands/outdated'
   end
 end

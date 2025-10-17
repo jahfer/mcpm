@@ -30,6 +30,10 @@ GEM
       metaclass (~> 0.0.1)
     net-http (0.6.0)
       uri
+    nio4r (2.7.4)
+    ori-rb (0.4.2)
+      nio4r (~> 2.7)
+      zeitwerk (~> 2.7.1)
     psych (5.2.2)
       date
       stringio
@@ -43,6 +47,7 @@ GEM
     stringio (3.1.2)
     uri (1.0.3)
     yaml (0.4.0)
+    zeitwerk (2.7.3)
 
 PLATFORMS
   ruby
@@ -58,6 +63,7 @@ DEPENDENCIES
   minitest-reporters
   mocha (~> 1.5.0)
   net-http
+  ori-rb (~> 0.4.2)
   rubyzip
   yaml
 

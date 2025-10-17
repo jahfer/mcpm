@@ -15,6 +15,8 @@ require 'tempfile'
 require 'rubygems'
 require 'bundler/setup'
 
+require 'debug'
+
 CLI::UI::StdoutRouter.enable
 
 require 'minitest/autorun'

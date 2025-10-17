@@ -169,6 +169,7 @@ module Mods
     end
 
     def install_mod!(mod_declaration)
+      FileUtils.mkdir_p(mods_dir) unless Dir.exist?(mods_dir)
       updater = Mods::Updater.new(self, mods_dir, minecraft_version)
       updater.download_mod(mod_declaration)
       

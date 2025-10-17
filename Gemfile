@@ -7,6 +7,7 @@ gem 'json'
 gem 'fileutils'
 gem 'rubyzip'
 gem 'yaml'
+gem 'ori-rb', '~> 0.4.2'
 
 group :development do
   gem 'debug', ">= 1.0.0"
