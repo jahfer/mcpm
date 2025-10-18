@@ -12,12 +12,10 @@ module MCPM
       end
 
       def test_invoke
-        Dir.mktmpdir("mcpm-install_test-test_invoke") do |working_dir|
-          FileUtils.copy_entry("test/fixtures/world/", working_dir)
-
+        with_mock_world do |mod_config|
           Mods::ModConfig.any_instance.expects(:install_mod!).times(19)
 
-          op = MockOpts.new(dir: working_dir)
+          op = MockOpts.new(dir: mod_config.base_dir)
           @cmd.invoke(op, NAME)
 
           # mod_files = Dir.glob(File.join(working_dir, "mods", "*.jar"))

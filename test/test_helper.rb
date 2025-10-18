@@ -22,3 +22,11 @@ CLI::UI::StdoutRouter.enable
 require 'minitest/autorun'
 require "minitest/unit"
 require 'mocha/minitest'
+
+def with_mock_world
+  Dir.mktmpdir("mcpm-test") do |working_dir|
+    FileUtils.copy_entry("test/fixtures/world/", working_dir)
+    mod_config = Mods::ModConfig.new(working_dir)
+    yield mod_config
+  end
+end

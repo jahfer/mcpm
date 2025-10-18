@@ -20,43 +20,54 @@ class Outdated < CLI::Kit::BaseCommand
   
   def invoke(op, _name)
     mod_config = mod_config(op.dir)
-    outdated_mods = []
     mod_versions = {}
     
     CLI::UI::Frame.open("Checking for outdated mods") do
       CLI::UI::Spinner.spin("Checking...") do |spinner|
-        Ori.sync do |scope|
-          scope.fork_each(mod_config.mod_declarations) do |mod_decl|
-            latest_version = mod_config.next_available_version(mod_decl)
-
-            installed_version = begin  
-              mod_config.find_installed_mod(mod_decl).version
-            rescue Mods::ModConfig::MissingModError
-              "?"
-            end
-
-            if latest_version && latest_version != installed_version
-              mod_versions[mod_decl.name] = [latest_version, installed_version]
-              outdated_mods << mod_decl
-            end
-          end
-        end
+        mod_versions = check_mod_versions(mod_config)
 
         spinner.update_title("{{green:Version check complete.}}")
       end
     end
 
     CLI::UI::Frame.open("Summary") do
+      outdated_mods = []
+      mod_versions.each do |mod_decl, (latest_verison, installed_version)|
+        unless latest_verison&.include?(installed_version)
+          outdated_mods << mod_decl
+        end
+      end
+      
       if outdated_mods.empty?
         puts CLI::UI.fmt("{{green:All mods are up to date.}}")
       else
         puts CLI::UI.fmt("{{yellow:Found #{outdated_mods.size} outdated mod(s):}}")
         outdated_mods.each do |mod_decl|
-          latest_version, installed_version = mod_versions.fetch(mod_decl.name, ["not installed", "not installed"])
+          latest_version, installed_version = mod_versions.fetch(mod_decl, ["not installed", "not installed"])
           puts CLI::UI.fmt("  * {{bold:#{mod_decl.name}}} ({{green:#{latest_version}}} > {{cyan:#{installed_version}}})")
         end
       end
     end
+  end
+
+  def check_mod_versions(mod_config)
+    mod_versions = {}
+
+    Ori.sync do |scope|
+      scope.fork_each(mod_config.mod_declarations) do |mod_decl|
+        latest_version = mod_config.next_available_version(mod_decl)
+
+        installed_version = begin  
+          mod_config.find_installed_mod(mod_decl).version
+        rescue Mods::ModConfig::MissingModError
+          "?"
+        end
+
+        mod_versions[mod_decl] = [latest_version, installed_version]
+      end
+    end
+    
+    mod_versions
   end
 
   private
