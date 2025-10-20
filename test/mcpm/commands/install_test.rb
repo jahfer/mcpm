@@ -13,7 +13,7 @@ module MCPM
 
       def test_invoke
         with_mock_world do |mod_config|
-          Mods::ModConfig.any_instance.expects(:install_mod!).times(19)
+          Mods::ModConfig.any_instance.expects(:install_mod!).times(3)
 
           op = MockOpts.new(dir: mod_config.base_dir)
           @cmd.invoke(op, NAME)

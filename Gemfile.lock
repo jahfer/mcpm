@@ -31,6 +31,7 @@ GEM
     net-http (0.6.0)
       uri
     nio4r (2.7.4)
+    openssl (3.3.1)
     ori-rb (0.4.2)
       nio4r (~> 2.7)
       zeitwerk (~> 2.7.1)
@@ -63,6 +64,7 @@ DEPENDENCIES
   minitest-reporters
   mocha (~> 1.5.0)
   net-http
+  openssl (~> 3.3.1)
   ori-rb (~> 0.4.2)
   rubyzip
   yaml

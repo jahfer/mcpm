@@ -94,7 +94,7 @@ module Mods
         puts "GET #{uri}" if ENV['MCPM_DEBUG']
 
         request = Net::HTTP::Get.new(uri)
-        request['User-Agent'] = 'mcpm/0.1'
+        request['User-Agent'] = 'jahfer/mcpm/0.1'
         response = http.request(request)
 
         case response.code.to_i
