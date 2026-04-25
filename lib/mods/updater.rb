@@ -55,6 +55,8 @@ module Mods
       backup_existing_mods unless backed_up?
       FileUtils.rm_rf(config.mods_dir)
       FileUtils.copy_entry(working_dir, config.mods_dir)
+    ensure
+      config.invalidate_jar_cache!
     end
 
     def backup_existing_mods

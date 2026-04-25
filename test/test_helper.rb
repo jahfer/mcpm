@@ -20,7 +20,7 @@ require 'debug'
 CLI::UI::StdoutRouter.enable
 
 require 'minitest/autorun'
-require "minitest/unit"
+MiniTest = Minitest unless defined?(MiniTest)
 require 'mocha/minitest'
 
 def with_mock_world

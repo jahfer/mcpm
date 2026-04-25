@@ -67,8 +67,23 @@ module Mods
       @mods_dir ||= File.join(base_dir, 'mods')
     end
 
-    def jar_files
-      @jar_files ||= Dir.glob(File.join(mods_dir, '*.jar'))
+    def jar_files(refresh: false)
+      @jar_files = load_jar_files if refresh || @jar_files.nil?
+      @jar_files.dup
+    end
+
+    def refresh_jar_cache!
+      @jar_files = load_jar_files
+    end
+
+    def invalidate_jar_cache!
+      @jar_files = nil
+    end
+
+    def invalidate_config_cache!
+      @config_data = nil
+      @mod_declarations = nil
+      @dependents_of = nil
     end
 
     def mod_loader
@@ -171,29 +186,26 @@ module Mods
       new_config = config_data.dup
       new_config['minecraft_version'] = new_version.to_s
 
-       # Invalidate cache
-      @config_data = nil
-
       Utility::YAML.dump_to_file(new_config, filepath: File.join(base_dir, YAML_CONFIG_FILE))
+      invalidate_config_cache!
     end
 
     def install_mod!(mod_declaration)
       FileUtils.mkdir_p(mods_dir) unless Dir.exist?(mods_dir)
       updater = Mods::Updater.new(self, mods_dir, minecraft_version)
       updater.download_mod(mod_declaration)
-      
-       # Invalidate cache
-      @mod_declarations = nil
-      @config_data = nil
+    ensure
+      invalidate_jar_cache!
     end
 
     def update_mod!(installed_mod)
-      unless find_installed_mod(installed_mod.declaration)
-        raise MissingModError, "Mod #{installed_mod.declaration.name} not installed"
-      end
-      
-      install_mod!(installed_mod.declaration) if can_update?(installed_mod)
-      FileUtils.remove([installed_mod.filepath])
+      find_installed_mod(installed_mod.declaration)
+      return unless can_update?(installed_mod)
+
+      install_mod!(installed_mod.declaration)
+      FileUtils.rm_f(installed_mod.filepath)
+    ensure
+      invalidate_jar_cache!
     end
 
     def add_mod!(mod_declaration)
@@ -205,7 +217,7 @@ module Mods
       new_config['mods'] << mod_declaration.to_h
 
       Utility::YAML.dump_to_file(new_config, filepath: File.join(base_dir, YAML_CONFIG_FILE))
-
+      invalidate_config_cache!
       install_mod!(mod_declaration)
     end
 
@@ -229,6 +241,10 @@ module Mods
 
         config_data
       end
+    end
+
+    def load_jar_files
+      Dir.glob(File.join(mods_dir, '*.jar')).sort
     end
 
     def version_from_jar(jar_path)
