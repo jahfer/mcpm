@@ -13,12 +13,10 @@ GEM
       reline (>= 0.3.8)
     erb (4.0.4)
       cgi (>= 0.3.3)
-    fileutils (1.7.3)
     io-console (0.8.1)
     irb (1.14.3)
       rdoc (>= 4.0.0)
       reline (>= 0.4.2)
-    json (2.15.0)
     metaclass (0.0.4)
     minitest (5.25.5)
     minitest-reporters (1.7.1)
@@ -28,11 +26,8 @@ GEM
       ruby-progressbar
     mocha (1.5.0)
       metaclass (~> 0.0.1)
-    net-http (0.6.0)
-      uri
-    nio4r (2.7.4)
-    openssl (3.3.1)
-    ori-rb (0.4.2)
+    nio4r (2.7.5)
+    ori-rb (0.4.8)
       nio4r (~> 2.7)
       zeitwerk (~> 2.7.1)
     psych (5.2.2)
@@ -46,9 +41,7 @@ GEM
     ruby-progressbar (1.13.0)
     rubyzip (3.1.1)
     stringio (3.1.2)
-    uri (1.0.3)
-    yaml (0.4.0)
-    zeitwerk (2.7.3)
+    zeitwerk (2.7.5)
 
 PLATFORMS
   ruby
@@ -58,16 +51,11 @@ DEPENDENCIES
   cli-kit
   cli-ui
   debug (>= 1.0.0)
-  fileutils
-  json
   minitest (>= 5.0.0)
   minitest-reporters
   mocha (~> 1.5.0)
-  net-http
-  openssl (~> 3.3.1)
-  ori-rb (~> 0.4.2)
+  ori-rb (~> 0.4.8)
   rubyzip
-  yaml
 
 BUNDLED WITH
    2.6.9

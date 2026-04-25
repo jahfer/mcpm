@@ -2,13 +2,8 @@ source 'https://rubygems.org'
 
 gem 'cli-kit'
 gem 'cli-ui'
-gem 'net-http'
-gem 'json'
-gem 'fileutils'
 gem 'rubyzip'
-gem 'yaml'
-gem 'ori-rb', '~> 0.4.2'
-gem "openssl", '~> 3.3.1'
+gem 'ori-rb', '~> 0.4.8'
 
 group :development do
   gem 'debug', ">= 1.0.0"
