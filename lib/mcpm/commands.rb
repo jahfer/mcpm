@@ -9,6 +9,7 @@ module MCPM
       Registry.add(->() { const_get(const) }, cmd)
     end
 
+    register :Help, 'help', 'mcpm/commands/help'
     register :Upgrade, 'upgrade', 'mcpm/commands/upgrade'
     register :Format, 'fmt', 'mcpm/commands/format'
     register :Add, 'add', 'mcpm/commands/add'
