@@ -34,15 +34,14 @@
   - `ModSelection` / `AddFlow`
 - **Benefits:** Better testability and smaller commands.
 
-### Create a cache invalidation strategy in `ModConfig`
-- **Current issue:** internal memoization is manually and inconsistently reset.
-- **Suggested refactor:** central `invalidate_caches!` method.
-- **Potential caches:**
+### Finish centralizing cache invalidation in `ModConfig`
+- **Current issue:** JAR cache invalidation is now centralized, but other memoized state is still reset manually.
+- **Suggested refactor:** extend the cache API into a broader `invalidate_caches!`/targeted invalidation strategy.
+- **Remaining caches to unify:**
   - `@config_data`
   - `@mod_declarations`
-  - `@jar_files`
   - `@dependents_of`
-- **Benefits:** Fewer stale-state bugs.
+- **Benefits:** Fewer stale-state bugs and less duplicated reset logic.
 
 ### Extract version logic into a dedicated component
 - **Current issue:** normalization, compatibility, and update comparisons are scattered.

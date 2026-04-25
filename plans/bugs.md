@@ -15,15 +15,6 @@
 - **Problem:** `lists.reduce(...).max.normalized` assumes `.max` is non-nil.
 - **Impact:** If there is no common version across lists, this can raise unexpectedly.
 
-### Installed JAR cache can become stale after install/update
-- **File:** `lib/mods/mods.rb`
-- **Problem:** `jar_files` is memoized, but mutation paths do not invalidate that cache.
-- **Impact:** Later reads in the same `ModConfig` instance may not see newly downloaded or removed JARs.
-- **Likely affected methods:**
-  - `install_mod!`
-  - `update_mod!`
-  - any call to `find_installed_mod` after mutation
-
 ### Update comparison is too naive
 - **File:** `lib/mods/mods.rb`
 - **Problem:** `can_update?` compares version strings directly.
