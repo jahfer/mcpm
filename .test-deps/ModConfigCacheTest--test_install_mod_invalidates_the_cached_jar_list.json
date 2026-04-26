@@ -1,0 +1,11 @@
+{
+  "test_file": "test/mod_config_cache_test.rb",
+  "method": "ModConfigCacheTest#test_install_mod_invalidates_the_cached_jar_list",
+  "type": "test",
+  "deps": [
+    "lib/mods/mods.rb",
+    "test/mod_config_cache_test.rb"
+  ],
+  "setup": "ModConfigCacheTest#_setup",
+  "traced_at": "2026-04-26T14:14:06Z"
+}

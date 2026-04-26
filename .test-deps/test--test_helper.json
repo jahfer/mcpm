@@ -1,9 +1,0 @@
-{
-  "test_file": "test/test_helper.rb",
-  "deps": [
-    "lib/mods/minecraft_version.rb",
-    "lib/mods/modrinth.rb",
-    "test/test_helper.rb"
-  ],
-  "traced_at": "2026-04-26T13:55:22Z"
-}

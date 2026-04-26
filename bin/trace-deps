@@ -1,29 +1,26 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 
-# bin/trace-deps — Trace a test file's runtime dependencies.
+# bin/trace-deps — Per-method runtime dependency tracing.
+#
+# Traces each test METHOD individually using Rotoscope to discover which
+# source files have code that actually executes during that method. Only
+# runtime calls matter — file-level `require` is ignored.
+#
+# setup/teardown are traced separately as shared deps for all methods
+# in a test class — changing a file only touched by setup invalidates
+# all methods in that class, but methods don't redundantly include
+# setup deps in their own graphs.
 #
 # Usage:
-#   bin/trace-deps --all                        # trace every test file (subprocess isolation)
-#   bin/trace-deps --all --box                  # trace using Ruby::Box (experimental)
-#   bin/trace-deps --shared                     # trace only test_helper.rb (tier 1)
+#   bin/trace-deps --all                        # trace every test file
 #   bin/trace-deps test/example_test.rb         # trace a single file
 #
-# Isolation modes:
-#   (default)  Each test is traced in a forked subprocess. Reliable,
-#              works with all gems including native extensions.
-#   --box      Uses Ruby::Box (RUBY_BOX=1) for in-process isolation.
-#              Faster (no subprocess overhead) but experimental — may
-#              crash with gems that have native C extensions due to the
-#              Box CoW mechanism in Ruby 4.0.x. Native extensions are
-#              pre-loaded in the main box as a workaround.
-#
-# Writes dependency graphs to .test-deps/<test_name>.json
-# These are consumed by bin/compile-test-deps to generate nix/test-deps.nix
+# Output: .test-deps/<Class>--<method>.json
+#         .test-deps/<Class>--_setup.json  (shared setup/teardown deps)
 
 require 'bundler/setup'
 require 'json'
-require 'set'
 require 'fileutils'
 require 'open3'
 
@@ -31,288 +28,222 @@ PROJECT_ROOT = File.expand_path('..', __dir__)
 DEPS_DIR = File.join(PROJECT_ROOT, '.test-deps')
 TEST_ROOT = File.join(PROJECT_ROOT, 'test')
 
-# Paths to exclude from the dependency graph — these are controlled
-# by Gemfile.lock / Nix, not by project source changes.
 EXCLUDE_PATTERNS = [
-  '/vendor/',
-  '/.bundle/',
-  '/.gem/',
-  '/gems/',
-  '/rubygems/',
-  '/bundler/',
+  '/vendor/', '/.bundle/', '/.gem/', '/gems/',
+  '/rubygems/', '/bundler/',
 ].freeze
 
-USE_BOX = ARGV.delete('--box')
+def trace_test_file(test_file)
+  abs_path = File.expand_path(test_file, PROJECT_ROOT)
+  raise "File not found: #{abs_path}" unless File.exist?(abs_path)
 
-def project_local?(path)
-  return false unless path.start_with?(PROJECT_ROOT)
-  EXCLUDE_PATTERNS.none? { |pat| path.include?(pat) }
-end
+  $stderr.puts "▶ Tracing #{test_file}..."
 
-def relative_path(path)
-  path.delete_prefix("#{PROJECT_ROOT}/")
-end
+  script = <<~RUBY
+    require 'bundler/setup'
+    require 'rotoscope'
+    require 'json'
+    require 'set'
+    require 'fileutils'
 
-# ── Subprocess isolation (default) ────────────────────────────────────
+    PROJECT_ROOT = #{PROJECT_ROOT.inspect}
+    EXCLUDE_PATTERNS = #{EXCLUDE_PATTERNS.inspect}
 
-module SubprocessTracer
-  module_function
+    def project_local?(path)
+      return false unless path.start_with?(PROJECT_ROOT)
+      EXCLUDE_PATTERNS.none? { |pat| path.include?(pat) }
+    end
 
-  def trace_test(test_file)
-    abs_path = File.expand_path(test_file, PROJECT_ROOT)
-    raise "File not found: #{abs_path}" unless File.exist?(abs_path)
-
-    $stderr.puts "▶ Tracing #{test_file} (subprocess)..."
-
-    script = <<~RUBY
-      require 'bundler/setup'
-      require 'rotoscope'
-      require 'json'
-      require 'set'
-
-      PROJECT_ROOT = #{PROJECT_ROOT.inspect}
-      EXCLUDE_PATTERNS = #{EXCLUDE_PATTERNS.inspect}
-
-      def project_local?(path)
-        return false unless path.start_with?(PROJECT_ROOT)
-        EXCLUDE_PATTERNS.none? { |pat| path.include?(pat) }
-      end
-
+    def collect_paths(rs_block)
       deps = Set.new
-      loaded_before = $LOADED_FEATURES.dup
-
-      $LOAD_PATH.unshift(File.join(PROJECT_ROOT, 'lib'))
-      $LOAD_PATH.unshift(File.join(PROJECT_ROOT, 'test'))
-
       rs = Rotoscope.new do |call|
         path = call.caller_path
         deps << path if path && project_local?(path)
       end
-
-      rs.trace do
-        load(#{abs_path.inspect})
-      end
-
-      ($LOADED_FEATURES - loaded_before).each do |path|
-        deps << path if project_local?(path)
-      end
-
-      relative = deps.map { |p| p.delete_prefix(PROJECT_ROOT + "/") }.sort
-      puts JSON.generate(relative)
-    RUBY
-
-    out, status = Open3.capture2(
-      RbConfig.ruby, '-e', script,
-      chdir: PROJECT_ROOT
-    )
-
-    unless status.success?
-      raise "Trace failed for #{test_file} (exit #{status.exitstatus})"
+      rs.trace { rs_block.call }
+      deps.map { |p| p.delete_prefix(PROJECT_ROOT + "/") }.sort
     end
 
-    json_line = out.lines.find { |l| l.strip.start_with?('[') }
-    deps = JSON.parse(json_line)
+    $LOAD_PATH.unshift(File.join(PROJECT_ROOT, 'lib'))
+    $LOAD_PATH.unshift(File.join(PROJECT_ROOT, 'test'))
 
-    {
-      test_file: relative_path(abs_path),
-      deps: deps,
-      traced_at: Time.now.utc.iso8601,
-    }
-  end
+    load(#{abs_path.inspect})
 
-  def trace_shared
-    $stderr.puts "▶ Tracing test_helper.rb (subprocess)..."
-    helper_path = File.join(TEST_ROOT, 'test_helper.rb')
+    # Per-method and per-lifecycle results
+    # { "ClassName#test_foo" => [deps], "ClassName#_setup" => [deps] }
+    method_deps = {}
+    setup_deps = {}
 
-    script = <<~RUBY
-      require 'bundler/setup'
-      require 'rotoscope'
-      require 'json'
-      require 'set'
-
-      PROJECT_ROOT = #{PROJECT_ROOT.inspect}
-      EXCLUDE_PATTERNS = #{EXCLUDE_PATTERNS.inspect}
-
-      def project_local?(path)
-        return false unless path.start_with?(PROJECT_ROOT)
-        EXCLUDE_PATTERNS.none? { |pat| path.include?(pat) }
+    Minitest::Test.prepend(Module.new do
+      define_method(:setup) do
+        @__trace_setup_deps = Set.new
+        @__trace_setup_rs = Rotoscope.new do |call|
+          path = call.caller_path
+          @__trace_setup_deps << path if path && project_local?(path)
+        end
+        @__trace_setup_rs.start_trace
+        super()
+        @__trace_setup_rs.stop_trace
       end
 
-      deps = Set.new
-      loaded_before = $LOADED_FEATURES.dup
+      define_method(:teardown) do
+        # Trace teardown into the same setup deps bucket
+        @__trace_setup_rs.start_trace
+        super()
+        @__trace_setup_rs.stop_trace
 
-      $LOAD_PATH.unshift(File.join(PROJECT_ROOT, 'lib'))
-      $LOAD_PATH.unshift(File.join(PROJECT_ROOT, 'test'))
+        class_name = self.class.name
+        setup_key = "\#{class_name}#_setup"
+        td = @__trace_setup_deps.select { |p| project_local?(p) }
+          .map { |p| p.delete_prefix(PROJECT_ROOT + "/") }
 
-      rs = Rotoscope.new do |call|
-        path = call.caller_path
-        deps << path if path && project_local?(path)
+        # Merge across methods (setup/teardown should be stable)
+        setup_deps[setup_key] ||= Set.new
+        setup_deps[setup_key].merge(td)
       end
 
-      rs.trace do
-        load(#{helper_path.inspect})
+      define_method(:run) do
+        # Let Minitest handle setup via our hooked #setup above
+        # We only trace the test method body itself
+        method_id = "\#{self.class.name}#\#{name}"
+        deps = Set.new
+
+        rs = Rotoscope.new do |call|
+          path = call.caller_path
+          deps << path if path && project_local?(path)
+        end
+
+        # Call super which runs setup, the test, and teardown
+        # But we only trace around the actual test method invocation.
+        # Minitest::Test#run calls: setup; test_method; teardown
+        # We need to intercept differently — override the test dispatch.
+
+        result = nil
+        # Actually, since we hooked setup/teardown separately above,
+        # we need to trace just the method body. The cleanest way is
+        # to intercept at the method call level.
+        original_run = method(:run).super_method
+
+        # We can't easily split super's internals, so instead:
+        # setup tracing is handled by our setup/teardown hooks above.
+        # Here we trace the ENTIRE run (setup+test+teardown) and then
+        # subtract setup deps to get the method-only deps.
+        rs.trace { result = original_run.call }
+
+        runtime_deps = deps
+          .select { |p| project_local?(p) }
+          .map { |p| p.delete_prefix(PROJECT_ROOT + "/") }
+          .to_set
+
+        method_deps[method_id] = runtime_deps.to_a.sort
+        result
       end
+    end)
 
-      ($LOADED_FEATURES - loaded_before).each do |path|
-        deps << path if project_local?(path)
+    Minitest.singleton_class.prepend(Module.new do
+      define_method(:run) do |args = []|
+        result = super(args)
+
+        output_path = File.join(#{DEPS_DIR.inspect}, '.trace-output.json')
+        FileUtils.mkdir_p(#{DEPS_DIR.inspect})
+        File.write(output_path, JSON.generate({
+          test_file: #{test_file.inspect},
+          methods: method_deps,
+          setup: setup_deps.transform_values(&:to_a),
+          traced_at: Time.now.utc.iso8601,
+        }))
+
+        result
       end
+    end)
+  RUBY
 
-      relative = deps.map { |p| p.delete_prefix(PROJECT_ROOT + "/") }.sort
-      puts JSON.generate(relative)
-    RUBY
+  out, status = Open3.capture2(
+    RbConfig.ruby, '-e', script,
+    chdir: PROJECT_ROOT
+  )
 
-    out, status = Open3.capture2(
-      RbConfig.ruby, '-e', script,
-      chdir: PROJECT_ROOT
-    )
-
-    raise "Trace failed for test_helper.rb" unless status.success?
-
-    json_line = out.lines.find { |l| l.strip.start_with?('[') }
-    deps = JSON.parse(json_line)
-
-    {
-      test_file: 'test/test_helper.rb',
-      deps: deps,
-      traced_at: Time.now.utc.iso8601,
-    }
-  end
-end
-
-# ── Ruby::Box isolation (experimental) ────────────────────────────────
-#
-# Uses Ruby::Box to give each test an isolated $LOADED_FEATURES without
-# forking a subprocess. Requires RUBY_BOX=1 environment variable.
-#
-# Workaround: all native extensions are pre-loaded in the main box
-# before creating any test boxes to reduce CoW overhead. The Box CoW
-# mechanism in Ruby 4.0.x still copies native .bundle/.so files per box,
-# which can cause crashes after several boxes are created.
-
-module BoxTracer
-  module_function
-
-  def ensure_box_enabled!
-    unless defined?(Ruby::Box) && Ruby::Box.enabled?
-      $stderr.puts "error: Ruby::Box is not enabled. Run with RUBY_BOX=1 env var."
-      $stderr.puts "  e.g.: RUBY_BOX=1 ruby bin/trace-deps --all --box"
-      exit 1
-    end
+  output_path = File.join(DEPS_DIR, '.trace-output.json')
+  unless File.exist?(output_path)
+    $stderr.puts "  ✗ No trace output for #{test_file}"
+    $stderr.puts out unless out.empty?
+    return
   end
 
-  # Pre-load all native extensions in the main box so Box CoW
-  # doesn't need to copy them (reduces crash likelihood).
-  def preload_native_extensions!
-    $stderr.puts "  Preloading native extensions in main box..."
-    %w[
-      json date psych prism cgi/escape nio4r
-      io/console stringio erb zlib openssl socket
-    ].each do |lib|
-      begin
-        require lib
-      rescue LoadError
-        # Some may not be available; that's fine
-      end
-    end
+  data = JSON.parse(File.read(output_path))
+  File.delete(output_path)
+
+  # Write setup deps (shared per class)
+  data['setup'].each do |setup_key, deps|
+    safe_name = setup_key.gsub(/[:#]/, '--')
+    out_path = File.join(DEPS_DIR, "#{safe_name}.json")
+    File.write(out_path, JSON.pretty_generate({
+      test_file: data['test_file'],
+      method: setup_key,
+      type: 'setup',
+      deps: deps.sort,
+      traced_at: data['traced_at'],
+    }) + "\n")
   end
 
-  def make_box
-    box = Ruby::Box.new
-    $LOAD_PATH.each { |p| box.load_path << p }
-    box.load_path.unshift(File.join(PROJECT_ROOT, 'lib'))
-    box.load_path.unshift(File.join(PROJECT_ROOT, 'test'))
-    box
+  # Write per-method deps (minus setup, which is a separate dependency)
+  data['methods'].each do |method_id, all_deps|
+    class_name = method_id.split('#').first
+    setup_key = "#{class_name}#_setup"
+    setup = (data['setup'][setup_key] || []).to_set
+
+    # Method-only deps = total runtime deps - setup/teardown deps
+    method_only = (all_deps.to_set - setup).to_a.sort
+
+    safe_name = method_id.gsub(/[:#]/, '--')
+    out_path = File.join(DEPS_DIR, "#{safe_name}.json")
+    File.write(out_path, JSON.pretty_generate({
+      test_file: data['test_file'],
+      method: method_id,
+      type: 'test',
+      deps: method_only,
+      setup: setup_key,
+      traced_at: data['traced_at'],
+    }) + "\n")
   end
 
-  def trace_in_box(file, use_load: false)
-    box = make_box
-    before = box.eval("$LOADED_FEATURES.dup")
-    if use_load
-      box.load(file)
-    else
-      box.require(file)
-    end
-    after = box.eval("$LOADED_FEATURES")
-    (after - before)
-      .select { |f| project_local?(f) }
-      .map { |f| relative_path(f) }
-      .sort
+  method_count = data['methods'].size
+  setup_count = data['setup'].size
+  $stderr.puts "  → #{method_count} method(s), #{setup_count} setup(s)"
+
+  # Show dep summary
+  data['methods'].each do |method_id, all_deps|
+    class_name = method_id.split('#').first
+    setup_key = "#{class_name}#_setup"
+    setup = (data['setup'][setup_key] || []).to_set
+    method_only = all_deps.to_set - setup
+    $stderr.puts "    #{method_id}: #{method_only.size} own + #{setup.size} setup"
   end
-
-  def trace_test(test_file)
-    abs_path = File.expand_path(test_file, PROJECT_ROOT)
-    raise "File not found: #{abs_path}" unless File.exist?(abs_path)
-
-    $stderr.puts "▶ Tracing #{test_file} (box)..."
-    deps = trace_in_box(test_file, use_load: true)
-
-    {
-      test_file: relative_path(abs_path),
-      deps: deps,
-      traced_at: Time.now.utc.iso8601,
-    }
-  end
-
-  def trace_shared
-    $stderr.puts "▶ Tracing test_helper.rb (box)..."
-    deps = trace_in_box('test_helper')
-
-    {
-      test_file: 'test/test_helper.rb',
-      deps: deps,
-      traced_at: Time.now.utc.iso8601,
-    }
-  end
-end
-
-# ── Common helpers ────────────────────────────────────────────────────
-
-def tracer
-  if USE_BOX
-    BoxTracer.ensure_box_enabled!
-    BoxTracer.preload_native_extensions!
-    BoxTracer
-  else
-    SubprocessTracer
-  end
-end
-
-def write_deps(result)
-  FileUtils.mkdir_p(DEPS_DIR)
-
-  safe_name = result[:test_file].gsub('/', '--').sub(/\.rb$/, '')
-  out_path = File.join(DEPS_DIR, "#{safe_name}.json")
-
-  File.write(out_path, JSON.pretty_generate(result) + "\n")
-  $stderr.puts "  → wrote #{out_path} (#{result[:deps].size} deps)"
 end
 
 def all_test_files
-  Dir.glob(File.join(TEST_ROOT, '**/*_test.rb')).map { |f| relative_path(f) }
+  Dir.glob(File.join(TEST_ROOT, '**/*_test.rb'))
+    .map { |f| f.delete_prefix("#{PROJECT_ROOT}/") }
 end
 
 # ── Main ──────────────────────────────────────────────────────────────
 
+FileUtils.mkdir_p(DEPS_DIR)
+
 case ARGV[0]
 when '--all'
-  t = tracer
-  exit_code = 0
-  write_deps(t.trace_shared)
+  # Clean old traces
+  Dir.glob(File.join(DEPS_DIR, '*.json')).each { |f| File.delete(f) }
   all_test_files.each do |f|
     begin
-      write_deps(t.trace_test(f))
+      trace_test_file(f)
     rescue => e
       $stderr.puts "  ✗ #{f}: #{e.message}"
-      exit_code = 1
     end
   end
-  exit!(exit_code) # skip minitest's at_exit
-when '--shared'
-  write_deps(tracer.trace_shared)
 when nil
-  $stderr.puts "Usage: bin/trace-deps [--box] <test_file> | --all | --shared"
+  $stderr.puts "Usage: bin/trace-deps [--all] [test_file ...]"
   exit 1
 else
-  t = tracer
-  ARGV.each { |f| write_deps(t.trace_test(f)) }
+  ARGV.each { |f| trace_test_file(f) }
 end

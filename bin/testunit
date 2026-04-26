@@ -13,80 +13,107 @@ def test_files
   Dir.glob(TEST_ROOT + "/**/*_test.rb")
 end
 
-# ── Affected test resolution ──────────────────────────────────────────
-# Given a list of changed files, find which tests are affected by
-# consulting the traced dependency graphs in .test-deps/.
+# ── Per-method affected resolution ────────────────────────────────────
+# Given changed files, find which test METHODS are affected by
+# consulting the per-method dependency graphs in .test-deps/.
+#
+# Returns an array of { test_file:, method: } hashes.
 
-def load_dep_graph
-  graph = {} # test_file => [dep, dep, ...]
+def load_method_graph
+  tests = []   # [{ test_file:, method:, deps:, setup: }]
+  setups = {}  # "Class#_setup" => [deps]
+
   Dir.glob(DEPS_DIR + "/*.json").each do |f|
     data = JSON.parse(File.read(f))
-    next if data["test_file"] == "test/test_helper.rb"
-    graph[data["test_file"]] = data["deps"]
+    if data["type"] == "setup"
+      setups[data["method"]] = data["deps"]
+    elsif data["type"] == "test"
+      tests << data
+    end
   end
-  graph
+
+  [tests, setups]
 end
 
-def affected_tests(changed_files)
+def affected_methods(changed_files)
   require 'json'
-  graph = load_dep_graph
+  require 'set'
 
-  if graph.empty?
+  tests, setups = load_method_graph
+
+  if tests.empty?
     $stderr.puts "No .test-deps/ found. Run `bin/trace-deps --all` first."
     $stderr.puts "Falling back to all tests."
-    return test_files.map { |f| f.delete_prefix(ROOT + "/") }
+    return test_files.map { |f| { "test_file" => f.delete_prefix(ROOT + "/"), "method" => nil } }
   end
 
   changed = changed_files.map { |f| f.delete_prefix(ROOT + "/") }.to_set
 
-  affected = Set.new
+  affected = []
 
-  # A changed file that is itself a test file should always run
-  changed.each do |f|
-    affected << f if graph.key?(f)
+  tests.each do |t|
+    method_deps = t["deps"].to_set
+
+    # Include setup deps if this method has a setup dependency
+    if t["setup"]
+      setup_deps = (setups[t["setup"]] || []).to_set
+      method_deps = method_deps | setup_deps
+    end
+
+    # Check if any dep was changed
+    if method_deps.any? { |d| changed.include?(d) }
+      affected << { "test_file" => t["test_file"], "method" => t["method"] }
+    end
+
+    # Also trigger if the test file itself was changed
+    if changed.include?(t["test_file"])
+      affected << { "test_file" => t["test_file"], "method" => t["method"] }
+    end
   end
 
-  # Find tests whose deps include any changed file
-  graph.each do |test_file, deps|
-    affected << test_file if deps.any? { |d| changed.include?(d) }
-  end
-
-  affected.to_a.sort
+  affected.uniq
 end
 
-def run_tests(files)
-  if files.empty?
+def run_affected(affected)
+  if affected.empty?
     puts "No affected tests."
-    return true
+    return
   end
 
-  files.each do |f|
-    abs = f.start_with?('/') ? f : File.join(ROOT, f)
-    require abs
+  # Group by test file so we can run methods together
+  by_file = affected.group_by { |a| a["test_file"] }
+
+  by_file.each do |test_file, methods|
+    abs = File.join(ROOT, test_file)
+
+    method_names = methods.filter_map { |m| m["method"] }
+    if method_names.empty?
+      # No method info — run whole file
+      require abs
+    else
+      # Extract just the method name (after #)
+      names = method_names.map { |m| m.split('#').last }
+      # Build a regex to match any of the method names
+      pattern = names.map { |n| Regexp.escape(n) }.join('|')
+      ARGV.replace(["-n", "/#{pattern}/"])
+      load abs
+    end
   end
-  true
 end
 
 # ── Watch mode ────────────────────────────────────────────────────────
-# Polls lib/ and test/ for mtime changes and runs affected tests.
 
 def watch
   require 'json'
 
   dirs = [ROOT + '/lib', ROOT + '/test']
-  poll_interval = 1 # seconds
+  poll_interval = 1
 
-  # Snapshot mtimes
   snapshot = {}
-  take_snapshot = -> {
-    dirs.each do |dir|
-      Dir.glob(dir + "/**/*.rb").each do |f|
-        snapshot[f] = File.mtime(f)
-      end
-    end
-  }
+  dirs.each do |dir|
+    Dir.glob(dir + "/**/*.rb").each { |f| snapshot[f] = File.mtime(f) }
+  end
 
-  take_snapshot.call
   puts "Watching lib/ and test/ for changes... (^C to stop)"
 
   loop do
@@ -99,16 +126,9 @@ def watch
         if snapshot[f] != mtime
           changed << f
           snapshot[f] = mtime
-        end
-      end
-    end
-
-    # Detect new files
-    dirs.each do |dir|
-      Dir.glob(dir + "/**/*.rb").each do |f|
-        unless snapshot.key?(f)
+        elsif !snapshot.key?(f)
           changed << f
-          snapshot[f] = File.mtime(f)
+          snapshot[f] = mtime
         end
       end
     end
@@ -118,21 +138,18 @@ def watch
     rel = changed.map { |f| f.delete_prefix(ROOT + "/") }
     puts "\n#{Time.now.strftime('%H:%M:%S')} — changed: #{rel.join(', ')}"
 
-    tests = affected_tests(changed)
-    if tests.empty?
+    affected = affected_methods(changed)
+    if affected.empty?
       puts "  No affected tests."
       next
     end
 
-    puts "  Running: #{tests.join(', ')}"
+    labels = affected.map { |a| a["method"] || a["test_file"] }
+    puts "  Running #{affected.size} method(s): #{labels.join(', ')}"
 
-    # Run in subprocess so minitest state doesn't accumulate
     pid = fork do
-      ARGV.clear # prevent minitest from parsing parent's flags
-      tests.each do |f|
-        abs = f.start_with?('/') ? f : File.join(ROOT, f)
-        load abs
-      end
+      ARGV.clear
+      run_affected(affected)
     end
     Process.wait(pid)
   end
@@ -147,25 +164,27 @@ when '--affected'
   require 'json'
   require 'set'
   files = ARGV.drop(1)
-  ARGV.clear # prevent minitest from parsing our flags
+  ARGV.clear
   if files.empty?
     $stderr.puts "Usage: bin/testunit --affected file1.rb [file2.rb ...]"
     exit 1
   end
-  tests = affected_tests(files)
-  if tests.empty?
+  affected = affected_methods(files)
+  if affected.empty?
     puts "No affected tests."
     exit 0
   end
-  puts "Running #{tests.size} affected test(s): #{tests.join(', ')}"
-  run_tests(tests)
+  labels = affected.map { |a| a["method"] || a["test_file"] }
+  puts "Running #{affected.size} affected method(s):"
+  labels.each { |l| puts "  #{l}" }
+  puts
+  run_affected(affected)
 when '--watch'
   watch
 when nil
   test_files.each { |f| require(f) }
   exit 0
 else
-  # A list of files is presumed to be specified
   ARGV.each do |a|
     require a.sub(%r{^test/}, '')
   end
