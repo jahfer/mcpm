@@ -2,11 +2,37 @@
 
 A Minecraft mod package manager.
 
+## Development
+
+### Setup
+
+This project uses [devenv](https://devenv.sh/) for development. With devenv
+installed:
+
+```bash
+devenv shell
+```
+
+This gives you Ruby 4.0, bundler, and all dependencies.
+
+### Running Tests
+
+```bash
+devenv tasks run mcpm:test                        # run all tests
+devenv tasks run mcpm:test test/example_test.rb   # run a single file
+```
+
+---
+
 ## Incremental Test Builds
 
-mcpm treats tests like incremental compilation: each test is a build artifact
-whose inputs are the source files it depends on. If none of those files change,
-the test result is cached and the test doesn't re-run.
+> **For contributors.** This section documents an experimental system that
+> treats tests like incremental compilation — only re-running tests whose
+> source dependencies have changed.
+
+mcpm models each test as a Nix derivation whose inputs are the source files
+it depends on. If none of those files change, the test result is cached in the
+Nix store and the test doesn't re-run.
 
 This is powered by two systems working together:
 
@@ -146,15 +172,6 @@ needed for dependency tracing without fork overhead.
 
 **When Box stabilizes**, it would eliminate ~200ms of subprocess startup per
 test during tracing — significant at scale (hundreds of tests).
-
-### devenv Integration
-
-The incremental test runner is available as a devenv task:
-
-```bash
-devenv tasks run mcpm:test              # traditional test runner
-nix build .#tests --print-build-logs    # incremental (Nix-cached)
-```
 
 ### File Overview
 
