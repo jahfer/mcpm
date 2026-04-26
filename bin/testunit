@@ -39,9 +39,19 @@ def affected_tests(changed_files)
 
   changed = changed_files.map { |f| f.delete_prefix(ROOT + "/") }.to_set
 
-  graph.filter_map do |test_file, deps|
-    test_file if deps.any? { |d| changed.include?(d) }
+  affected = Set.new
+
+  # A changed file that is itself a test file should always run
+  changed.each do |f|
+    affected << f if graph.key?(f)
   end
+
+  # Find tests whose deps include any changed file
+  graph.each do |test_file, deps|
+    affected << test_file if deps.any? { |d| changed.include?(d) }
+  end
+
+  affected.to_a.sort
 end
 
 def run_tests(files)
