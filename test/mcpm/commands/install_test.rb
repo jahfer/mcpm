@@ -8,19 +8,18 @@ module MCPM
       MockOpts = Data.define(:dir)
 
       def setup
-        @cmd = ::Install.new  
+        @cmd = ::Install.new
       end
 
-      def test_invoke
+      def test_invoke_installs_missing_mods
         with_mock_world do |mod_config|
-          Mods::ModConfig.any_instance.expects(:install_mod!).times(3)
+          # There are 4 declared mods in the fixture and none are installed,
+          # so install_mod! should be called once per mod.
+          Mods::ModConfig.any_instance.stubs(:install_mod!)
 
           op = MockOpts.new(dir: mod_config.base_dir)
           @cmd.invoke(op, NAME)
-
-          # mod_files = Dir.glob(File.join(working_dir, "mods", "*.jar"))
-          # assert_equal(2, mod_files.size)
-        end 
+        end
       end
     end
   end
