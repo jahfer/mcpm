@@ -1,6 +1,0 @@
-[tools]
-ruby = "4.0.3"
-
-[tasks."bundle:install"]
-description = "Install gem dependencies"
-run = "bundle install"
