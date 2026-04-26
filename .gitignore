@@ -3,3 +3,6 @@ vendor/
 # devenv
 .devenv*
 devenv.lock
+
+# nix build output
+result
