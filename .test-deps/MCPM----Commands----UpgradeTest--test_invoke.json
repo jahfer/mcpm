@@ -1,0 +1,14 @@
+{
+  "test_file": "test/mcpm/commands/upgrade_test.rb",
+  "method": "MCPM::Commands::UpgradeTest#test_invoke",
+  "type": "test",
+  "deps": [
+    "lib/mcpm/commands/upgrade.rb",
+    "lib/mods/minecraft_version.rb",
+    "lib/mods/mods.rb",
+    "test/mcpm/commands/upgrade_test.rb",
+    "test/test_helper.rb"
+  ],
+  "setup": "MCPM::Commands::UpgradeTest#_setup",
+  "traced_at": "2026-04-26T14:14:06Z"
+}

@@ -1,0 +1,7 @@
+{
+  "test_file": "test/example_test.rb",
+  "method": "MCPM::ExampleTest#_setup",
+  "type": "setup",
+  "deps": [],
+  "traced_at": "2026-04-26T14:14:05Z"
+}

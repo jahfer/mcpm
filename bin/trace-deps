@@ -1,0 +1,249 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# bin/trace-deps — Per-method runtime dependency tracing.
+#
+# Traces each test METHOD individually using Rotoscope to discover which
+# source files have code that actually executes during that method. Only
+# runtime calls matter — file-level `require` is ignored.
+#
+# setup/teardown are traced separately as shared deps for all methods
+# in a test class — changing a file only touched by setup invalidates
+# all methods in that class, but methods don't redundantly include
+# setup deps in their own graphs.
+#
+# Usage:
+#   bin/trace-deps --all                        # trace every test file
+#   bin/trace-deps test/example_test.rb         # trace a single file
+#
+# Output: .test-deps/<Class>--<method>.json
+#         .test-deps/<Class>--_setup.json  (shared setup/teardown deps)
+
+require 'bundler/setup'
+require 'json'
+require 'fileutils'
+require 'open3'
+
+PROJECT_ROOT = File.expand_path('..', __dir__)
+DEPS_DIR = File.join(PROJECT_ROOT, '.test-deps')
+TEST_ROOT = File.join(PROJECT_ROOT, 'test')
+
+EXCLUDE_PATTERNS = [
+  '/vendor/', '/.bundle/', '/.gem/', '/gems/',
+  '/rubygems/', '/bundler/',
+].freeze
+
+def trace_test_file(test_file)
+  abs_path = File.expand_path(test_file, PROJECT_ROOT)
+  raise "File not found: #{abs_path}" unless File.exist?(abs_path)
+
+  $stderr.puts "▶ Tracing #{test_file}..."
+
+  script = <<~RUBY
+    require 'bundler/setup'
+    require 'rotoscope'
+    require 'json'
+    require 'set'
+    require 'fileutils'
+
+    PROJECT_ROOT = #{PROJECT_ROOT.inspect}
+    EXCLUDE_PATTERNS = #{EXCLUDE_PATTERNS.inspect}
+
+    def project_local?(path)
+      return false unless path.start_with?(PROJECT_ROOT)
+      EXCLUDE_PATTERNS.none? { |pat| path.include?(pat) }
+    end
+
+    def collect_paths(rs_block)
+      deps = Set.new
+      rs = Rotoscope.new do |call|
+        path = call.caller_path
+        deps << path if path && project_local?(path)
+      end
+      rs.trace { rs_block.call }
+      deps.map { |p| p.delete_prefix(PROJECT_ROOT + "/") }.sort
+    end
+
+    $LOAD_PATH.unshift(File.join(PROJECT_ROOT, 'lib'))
+    $LOAD_PATH.unshift(File.join(PROJECT_ROOT, 'test'))
+
+    load(#{abs_path.inspect})
+
+    # Per-method and per-lifecycle results
+    # { "ClassName#test_foo" => [deps], "ClassName#_setup" => [deps] }
+    method_deps = {}
+    setup_deps = {}
+
+    Minitest::Test.prepend(Module.new do
+      define_method(:setup) do
+        @__trace_setup_deps = Set.new
+        @__trace_setup_rs = Rotoscope.new do |call|
+          path = call.caller_path
+          @__trace_setup_deps << path if path && project_local?(path)
+        end
+        @__trace_setup_rs.start_trace
+        super()
+        @__trace_setup_rs.stop_trace
+      end
+
+      define_method(:teardown) do
+        # Trace teardown into the same setup deps bucket
+        @__trace_setup_rs.start_trace
+        super()
+        @__trace_setup_rs.stop_trace
+
+        class_name = self.class.name
+        setup_key = "\#{class_name}#_setup"
+        td = @__trace_setup_deps.select { |p| project_local?(p) }
+          .map { |p| p.delete_prefix(PROJECT_ROOT + "/") }
+
+        # Merge across methods (setup/teardown should be stable)
+        setup_deps[setup_key] ||= Set.new
+        setup_deps[setup_key].merge(td)
+      end
+
+      define_method(:run) do
+        # Let Minitest handle setup via our hooked #setup above
+        # We only trace the test method body itself
+        method_id = "\#{self.class.name}#\#{name}"
+        deps = Set.new
+
+        rs = Rotoscope.new do |call|
+          path = call.caller_path
+          deps << path if path && project_local?(path)
+        end
+
+        # Call super which runs setup, the test, and teardown
+        # But we only trace around the actual test method invocation.
+        # Minitest::Test#run calls: setup; test_method; teardown
+        # We need to intercept differently — override the test dispatch.
+
+        result = nil
+        # Actually, since we hooked setup/teardown separately above,
+        # we need to trace just the method body. The cleanest way is
+        # to intercept at the method call level.
+        original_run = method(:run).super_method
+
+        # We can't easily split super's internals, so instead:
+        # setup tracing is handled by our setup/teardown hooks above.
+        # Here we trace the ENTIRE run (setup+test+teardown) and then
+        # subtract setup deps to get the method-only deps.
+        rs.trace { result = original_run.call }
+
+        runtime_deps = deps
+          .select { |p| project_local?(p) }
+          .map { |p| p.delete_prefix(PROJECT_ROOT + "/") }
+          .to_set
+
+        method_deps[method_id] = runtime_deps.to_a.sort
+        result
+      end
+    end)
+
+    Minitest.singleton_class.prepend(Module.new do
+      define_method(:run) do |args = []|
+        result = super(args)
+
+        output_path = File.join(#{DEPS_DIR.inspect}, '.trace-output.json')
+        FileUtils.mkdir_p(#{DEPS_DIR.inspect})
+        File.write(output_path, JSON.generate({
+          test_file: #{test_file.inspect},
+          methods: method_deps,
+          setup: setup_deps.transform_values(&:to_a),
+          traced_at: Time.now.utc.iso8601,
+        }))
+
+        result
+      end
+    end)
+  RUBY
+
+  out, status = Open3.capture2(
+    RbConfig.ruby, '-e', script,
+    chdir: PROJECT_ROOT
+  )
+
+  output_path = File.join(DEPS_DIR, '.trace-output.json')
+  unless File.exist?(output_path)
+    $stderr.puts "  ✗ No trace output for #{test_file}"
+    $stderr.puts out unless out.empty?
+    return
+  end
+
+  data = JSON.parse(File.read(output_path))
+  File.delete(output_path)
+
+  # Write setup deps (shared per class)
+  data['setup'].each do |setup_key, deps|
+    safe_name = setup_key.gsub(/[:#]/, '--')
+    out_path = File.join(DEPS_DIR, "#{safe_name}.json")
+    File.write(out_path, JSON.pretty_generate({
+      test_file: data['test_file'],
+      method: setup_key,
+      type: 'setup',
+      deps: deps.sort,
+      traced_at: data['traced_at'],
+    }) + "\n")
+  end
+
+  # Write per-method deps (minus setup, which is a separate dependency)
+  data['methods'].each do |method_id, all_deps|
+    class_name = method_id.split('#').first
+    setup_key = "#{class_name}#_setup"
+    setup = (data['setup'][setup_key] || []).to_set
+
+    # Method-only deps = total runtime deps - setup/teardown deps
+    method_only = (all_deps.to_set - setup).to_a.sort
+
+    safe_name = method_id.gsub(/[:#]/, '--')
+    out_path = File.join(DEPS_DIR, "#{safe_name}.json")
+    File.write(out_path, JSON.pretty_generate({
+      test_file: data['test_file'],
+      method: method_id,
+      type: 'test',
+      deps: method_only,
+      setup: setup_key,
+      traced_at: data['traced_at'],
+    }) + "\n")
+  end
+
+  method_count = data['methods'].size
+  setup_count = data['setup'].size
+  $stderr.puts "  → #{method_count} method(s), #{setup_count} setup(s)"
+
+  # Show dep summary
+  data['methods'].each do |method_id, all_deps|
+    class_name = method_id.split('#').first
+    setup_key = "#{class_name}#_setup"
+    setup = (data['setup'][setup_key] || []).to_set
+    method_only = all_deps.to_set - setup
+    $stderr.puts "    #{method_id}: #{method_only.size} own + #{setup.size} setup"
+  end
+end
+
+def all_test_files
+  Dir.glob(File.join(TEST_ROOT, '**/*_test.rb'))
+    .map { |f| f.delete_prefix("#{PROJECT_ROOT}/") }
+end
+
+# ── Main ──────────────────────────────────────────────────────────────
+
+FileUtils.mkdir_p(DEPS_DIR)
+
+case ARGV[0]
+when '--all'
+  # Clean old traces
+  Dir.glob(File.join(DEPS_DIR, '*.json')).each { |f| File.delete(f) }
+  all_test_files.each do |f|
+    begin
+      trace_test_file(f)
+    rescue => e
+      $stderr.puts "  ✗ #{f}: #{e.message}"
+    end
+  end
+when nil
+  $stderr.puts "Usage: bin/trace-deps [--all] [test_file ...]"
+  exit 1
+else
+  ARGV.each { |f| trace_test_file(f) }
+end
