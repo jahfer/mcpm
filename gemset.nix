@@ -241,6 +241,16 @@
     };
     version = "0.6.3";
   };
+  rotoscope = {
+    groups = ["test"];
+    platforms = [];
+    source = {
+      remotes = ["https://rubygems.org"];
+      sha256 = "1xxxy35b9p2xp02lbly97wgnxapla9rza136vadv7aqc1f26yb9l";
+      type = "gem";
+    };
+    version = "0.3.0";
+  };
   ruby-progressbar = {
     groups = ["default" "test"];
     platforms = [];

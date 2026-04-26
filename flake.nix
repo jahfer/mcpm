@@ -17,49 +17,35 @@
           name = "mcpm-gems";
           inherit ruby;
           gemdir = ./.;
-          # Some gems have native extensions that need these
           buildInputs = [ pkgs.libyaml ];
         };
 
-        # ── Test dependency manifest ────────────────────────────────
-        # Each key is a test file; `srcs` lists the source files it
-        # depends on. Changing any src (or the test itself, or shared
-        # infra) invalidates the cached result → test re-runs.
+        # ── Test dependency manifest (auto-generated) ───────────────
+        # Produced by: bin/trace-deps --all && bin/compile-test-deps
         testDeps = import ./nix/test-deps.nix;
 
-        # ── Shared test infrastructure ──────────────────────────────
-        # These files are inputs to *every* test derivation. Changing
-        # any of them invalidates all cached test results.
-        sharedSrc = pkgs.lib.fileset.toSource {
-          root = ./.;
-          fileset = pkgs.lib.fileset.unions [
-            ./test/test_helper.rb
-            ./test/fixtures
-            ./lib              # test_helper.rb loads lib/ files at require time
-            ./Gemfile
-            ./Gemfile.lock
-          ];
-        };
+        # ── Tier 1: shared deps (test_helper.rb + its transitive requires)
+        sharedFiles = testDeps._shared.srcs;
+
+        # ── Per-test entries (everything except _shared) ────────────
+        perTestDeps = builtins.removeAttrs testDeps [ "_shared" ];
 
         # ── Per-test derivation builder ─────────────────────────────
-        mkTest = { testFile, srcs }:
+        mkTest = testFile: { srcs }:
           let
-            # Collect all source files relevant to this test
+            # All files this test needs: the test itself + per-test srcs + shared srcs + fixtures
+            allFiles =
+              [ testFile ]
+              ++ srcs
+              ++ sharedFiles;
+
             testSrc = pkgs.lib.fileset.toSource {
               root = ./.;
               fileset = pkgs.lib.fileset.unions (
-                # The test file itself
-                [ (./. + "/${testFile}") ]
-                # Its declared source dependencies
-                ++ map (f: ./. + "/${f}") srcs
-                # Shared infra (test_helper, fixtures, lib, Gemfile)
-                ++ [
-                  ./test/test_helper.rb
-                  ./test/fixtures
-                  ./lib
-                  ./Gemfile
-                  ./Gemfile.lock
-                ]
+                # Precise file-level deps from Rotoscope tracing
+                (map (f: ./. + "/${f}") allFiles)
+                # Fixtures are directories, always included
+                ++ [ ./test/fixtures ]
               );
             };
 
@@ -71,23 +57,18 @@
 
             nativeBuildInputs = [ gems ruby gems.wrappedRuby ];
 
-            # Skip configure/build phases — we only need the check phase
             dontConfigure = true;
             dontBuild = true;
 
-            # The test itself runs in the check phase
             doCheck = true;
             checkPhase = ''
               runHook preCheck
-
               export HOME=$TMPDIR
               echo "▶ Running ${testFile}..."
               ruby -Itest -Ilib ${testFile}
-
               runHook postCheck
             '';
 
-            # Produce a marker output so Nix has something to cache
             installPhase = ''
               mkdir -p $out
               echo "PASS ${testFile}" > $out/result
@@ -96,9 +77,7 @@
           };
 
         # ── Build all test derivations from the manifest ────────────
-        testDerivations = builtins.mapAttrs (testFile: deps:
-          mkTest { inherit testFile; inherit (deps) srcs; }
-        ) testDeps;
+        testDerivations = builtins.mapAttrs mkTest perTestDeps;
 
         # ── Aggregate: build this to run all tests ──────────────────
         allTests = pkgs.symlinkJoin {
@@ -111,7 +90,7 @@
           tests = allTests;
         }
         # Also expose individual test derivations as packages
-        // builtins.mapAttrs (name: drv: drv) testDerivations;
+        // builtins.mapAttrs (_: drv: drv) testDerivations;
 
         # Quick check: `nix flake check` runs all tests
         checks.tests = allTests;

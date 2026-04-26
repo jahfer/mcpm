@@ -15,8 +15,6 @@ require 'tempfile'
 require 'rubygems'
 require 'bundler/setup'
 
-require 'debug'
-
 # Enable StdoutRouter — required by CLI::UI::Spinner and CLI::UI::Frame
 # used in the command implementations under test.
 CLI::UI::StdoutRouter.enable

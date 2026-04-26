@@ -48,6 +48,7 @@ GEM
       tsort
     reline (0.6.3)
       io-console (~> 0.5)
+    rotoscope (0.3.0)
     ruby-progressbar (1.13.0)
     rubyzip (3.1.1)
     stringio (3.2.0)
@@ -66,6 +67,7 @@ DEPENDENCIES
   minitest-reporters
   mocha (~> 1.5.0)
   ori-rb (~> 0.4.8)
+  rotoscope
   rubyzip
 
 BUNDLED WITH

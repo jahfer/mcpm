@@ -1,0 +1,15 @@
+{
+  "test_file": "test/mcpm/commands/install_test.rb",
+  "deps": [
+    "lib/mcpm/commands/install.rb",
+    "lib/mods/downloader.rb",
+    "lib/mods/minecraft_version.rb",
+    "lib/mods/modrinth.rb",
+    "lib/mods/mods.rb",
+    "lib/mods/updater.rb",
+    "lib/utility/yaml.rb",
+    "test/mcpm/commands/install_test.rb",
+    "test/test_helper.rb"
+  ],
+  "traced_at": "2026-04-26T13:45:44Z"
+}

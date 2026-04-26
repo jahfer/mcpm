@@ -1,0 +1,240 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# bin/trace-deps — Trace a test file's runtime dependencies using Rotoscope.
+#
+# Usage:
+#   bin/trace-deps test/example_test.rb
+#   bin/trace-deps --all                   # trace every test file
+#   bin/trace-deps --shared                # trace only test_helper.rb (tier 1)
+#
+# Writes dependency graphs to .test-deps/<test_name>.json
+# These are consumed by bin/compile-test-deps to generate nix/test-deps.nix
+
+require 'bundler/setup'
+require 'rotoscope'
+require 'json'
+require 'set'
+require 'fileutils'
+require 'open3'
+
+PROJECT_ROOT = File.expand_path('..', __dir__)
+DEPS_DIR = File.join(PROJECT_ROOT, '.test-deps')
+TEST_ROOT = File.join(PROJECT_ROOT, 'test')
+
+# Paths to exclude from the dependency graph — these are controlled
+# by Gemfile.lock / Nix, not by project source changes.
+EXCLUDE_PATTERNS = [
+  '/vendor/',
+  '/.bundle/',
+  '/.gem/',
+  '/gems/',
+  '/rubygems/',
+  '/bundler/',
+].freeze
+
+def project_local?(path)
+  return false unless path.start_with?(PROJECT_ROOT)
+  EXCLUDE_PATTERNS.none? { |pat| path.include?(pat) }
+end
+
+def relative_path(path)
+  path.delete_prefix("#{PROJECT_ROOT}/")
+end
+
+# Trace a block of code and return the set of project-local file paths
+# that were involved in execution. Combines two strategies:
+#   1. $LOADED_FEATURES diff — catches all require'd files
+#   2. Rotoscope caller_path — catches files with runtime method calls
+def trace_deps(&block)
+  deps = Set.new
+
+  # Snapshot loaded features before the trace
+  loaded_before = $LOADED_FEATURES.dup
+
+  rs = Rotoscope.new do |call|
+    path = call.caller_path
+    deps << path if path && project_local?(path)
+  end
+
+  rs.trace(&block)
+
+  # Capture files loaded during trace (require'd files)
+  loaded_after = $LOADED_FEATURES
+  new_loads = loaded_after - loaded_before
+  new_loads.each do |path|
+    deps << path if project_local?(path)
+  end
+
+  deps.map { |p| relative_path(p) }.sort
+end
+
+# Trace a single test file in an isolated subprocess.
+# Returns { test_file:, deps:, passed: }
+def trace_test(test_file)
+  abs_path = File.expand_path(test_file, PROJECT_ROOT)
+  raise "File not found: #{abs_path}" unless File.exist?(abs_path)
+
+  $stderr.puts "▶ Tracing #{test_file}..."
+
+  # Run in a subprocess so each test gets a clean $LOADED_FEATURES
+  # and Rotoscope sees all file loads fresh.
+  script = <<~RUBY
+    require 'bundler/setup'
+    require 'rotoscope'
+    require 'json'
+    require 'set'
+
+    PROJECT_ROOT = #{PROJECT_ROOT.inspect}
+    EXCLUDE_PATTERNS = #{EXCLUDE_PATTERNS.inspect}
+
+    def project_local?(path)
+      return false unless path.start_with?(PROJECT_ROOT)
+      EXCLUDE_PATTERNS.none? { |pat| path.include?(pat) }
+    end
+
+    deps = Set.new
+    loaded_before = $LOADED_FEATURES.dup
+
+    $LOAD_PATH.unshift(File.join(PROJECT_ROOT, 'lib'))
+    $LOAD_PATH.unshift(File.join(PROJECT_ROOT, 'test'))
+
+    rs = Rotoscope.new do |call|
+      path = call.caller_path
+      deps << path if path && project_local?(path)
+    end
+
+    rs.trace do
+      load(#{abs_path.inspect})
+    end
+
+    # Also capture require'd files
+    ($LOADED_FEATURES - loaded_before).each do |path|
+      deps << path if project_local?(path)
+    end
+
+    relative = deps.map { |p| p.delete_prefix(PROJECT_ROOT + "/") }.sort
+    puts JSON.generate(relative)
+  RUBY
+
+  # Run the tracer subprocess
+  out, status = Open3.capture2(
+    RbConfig.ruby, '-e', script,
+    chdir: PROJECT_ROOT
+  )
+
+  unless status.success?
+    raise "Trace failed for #{test_file} (exit #{status.exitstatus})"
+  end
+
+  # Parse the JSON deps from the last line of stdout
+  # (minitest output may precede it, so find the JSON line)
+  json_line = out.lines.find { |l| l.strip.start_with?('[') }
+  deps = JSON.parse(json_line)
+
+  {
+    test_file: test_file.delete_prefix("#{PROJECT_ROOT}/"),
+    deps: deps,
+    traced_at: Time.now.utc.iso8601,
+  }
+end
+
+# Trace just test_helper.rb (tier 1 shared infrastructure) in isolation
+def trace_shared
+  $stderr.puts "▶ Tracing test_helper.rb (tier 1)..."
+
+  helper_path = File.join(TEST_ROOT, 'test_helper.rb')
+
+  script = <<~RUBY
+    require 'bundler/setup'
+    require 'rotoscope'
+    require 'json'
+    require 'set'
+
+    PROJECT_ROOT = #{PROJECT_ROOT.inspect}
+    EXCLUDE_PATTERNS = #{EXCLUDE_PATTERNS.inspect}
+
+    def project_local?(path)
+      return false unless path.start_with?(PROJECT_ROOT)
+      EXCLUDE_PATTERNS.none? { |pat| path.include?(pat) }
+    end
+
+    deps = Set.new
+    loaded_before = $LOADED_FEATURES.dup
+
+    $LOAD_PATH.unshift(File.join(PROJECT_ROOT, 'lib'))
+    $LOAD_PATH.unshift(File.join(PROJECT_ROOT, 'test'))
+
+    rs = Rotoscope.new do |call|
+      path = call.caller_path
+      deps << path if path && project_local?(path)
+    end
+
+    rs.trace do
+      load(#{helper_path.inspect})
+    end
+
+    ($LOADED_FEATURES - loaded_before).each do |path|
+      deps << path if project_local?(path)
+    end
+
+    relative = deps.map { |p| p.delete_prefix(PROJECT_ROOT + "/") }.sort
+    puts JSON.generate(relative)
+  RUBY
+
+  out, status = Open3.capture2(
+    RbConfig.ruby, '-e', script,
+    chdir: PROJECT_ROOT
+  )
+
+  raise "Trace failed for test_helper.rb" unless status.success?
+
+  json_line = out.lines.find { |l| l.strip.start_with?('[') }
+  deps = JSON.parse(json_line)
+
+  {
+    test_file: 'test/test_helper.rb',
+    deps: deps,
+    traced_at: Time.now.utc.iso8601,
+  }
+end
+
+def write_deps(result)
+  FileUtils.mkdir_p(DEPS_DIR)
+
+  # Use the test file path as the key, replacing / with --
+  safe_name = result[:test_file].gsub('/', '--').sub(/\.rb$/, '')
+  out_path = File.join(DEPS_DIR, "#{safe_name}.json")
+
+  File.write(out_path, JSON.pretty_generate(result) + "\n")
+  $stderr.puts "  → wrote #{out_path} (#{result[:deps].size} deps)"
+end
+
+def all_test_files
+  Dir.glob(File.join(TEST_ROOT, '**/*_test.rb')).map { |f| relative_path(f) }
+end
+
+# ── Main ──────────────────────────────────────────────────────────────
+
+case ARGV[0]
+when '--all'
+  # Prevent minitest's at_exit hook from parsing our flags
+  exit_code = 0
+  write_deps(trace_shared)
+  all_test_files.each do |f|
+    begin
+      write_deps(trace_test(f))
+    rescue => e
+      $stderr.puts "  ✗ #{f}: #{e.message}"
+      exit_code = 1
+    end
+  end
+  exit!(exit_code) # skip minitest's at_exit
+when '--shared'
+  write_deps(trace_shared)
+when nil
+  $stderr.puts "Usage: bin/trace-deps <test_file> | --all | --shared"
+  exit 1
+else
+  ARGV.each { |f| write_deps(trace_test(f)) }
+end
