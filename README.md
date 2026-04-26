@@ -1,6 +1,44 @@
 # mcpm
 
-A Minecraft mod package manager.
+A Minecraft mod package manager. Manages Fabric mods for Minecraft servers
+using a declarative YAML configuration file (`mcpm.yml`).
+
+## Usage
+
+mcpm operates on a `mcpm.yml` file in your Minecraft server directory. The
+config declares your Minecraft version, mod loader, and the mods you want:
+
+```yaml
+minecraft_version: 1.21.8
+loader: fabric
+mods:
+  - project_id: P7dR8mSH
+    name: Fabric API
+    type: client_and_server
+    is_platform: true
+  - project_id: 6AQIaxuO
+    name: WTHIT
+    type: client_and_server
+    depends_on:
+      - P7dR8mSH
+```
+
+### Commands
+
+```
+mcpm install              Install all mods from mcpm.yml
+mcpm add --query <name>   Search for and add a mod
+mcpm update <mod_id>      Update a specific mod to latest compatible version
+mcpm outdated             Check for outdated mods
+mcpm upgrade [--dry-run]  Check if a Minecraft version upgrade is possible
+mcpm fmt                  Format the mcpm.yml configuration file
+mcpm help [command]       Show help
+```
+
+All commands accept `--dir <path>` to specify the server directory (defaults
+to the current directory).
+
+Mod metadata is resolved from [Modrinth](https://modrinth.com/).
 
 ## Development
 
