@@ -128,6 +128,7 @@ def watch
 
     # Run in subprocess so minitest state doesn't accumulate
     pid = fork do
+      ARGV.clear # prevent minitest from parsing parent's flags
       tests.each do |f|
         abs = f.start_with?('/') ? f : File.join(ROOT, f)
         load abs
