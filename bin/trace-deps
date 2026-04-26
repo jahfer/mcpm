@@ -23,6 +23,7 @@ require 'bundler/setup'
 require 'json'
 require 'fileutils'
 require 'open3'
+require 'digest'
 
 PROJECT_ROOT = File.expand_path('..', __dir__)
 DEPS_DIR = File.join(PROJECT_ROOT, '.test-deps')
@@ -32,6 +33,20 @@ EXCLUDE_PATTERNS = [
   '/vendor/', '/.bundle/', '/.gem/', '/gems/',
   '/rubygems/', '/bundler/',
 ].freeze
+
+# Compute SHA256 of a file's contents. Returns nil if file doesn't exist.
+def content_hash(relative_path)
+  abs = File.join(PROJECT_ROOT, relative_path)
+  return nil unless File.exist?(abs)
+  Digest::SHA256.hexdigest(File.read(abs))
+end
+
+# Hash all deps in a list, returns { "path" => "sha256hex", ... }
+def hash_deps(deps)
+  deps.each_with_object({}) do |dep, h|
+    h[dep] = content_hash(dep)
+  end
+end
 
 def trace_test_file(test_file)
   abs_path = File.expand_path(test_file, PROJECT_ROOT)
@@ -45,6 +60,7 @@ def trace_test_file(test_file)
     require 'json'
     require 'set'
     require 'fileutils'
+    require 'digest'
 
     PROJECT_ROOT = #{PROJECT_ROOT.inspect}
     EXCLUDE_PATTERNS = #{EXCLUDE_PATTERNS.inspect}
@@ -175,13 +191,15 @@ def trace_test_file(test_file)
 
   # Write setup deps (shared per class)
   data['setup'].each do |setup_key, deps|
+    sorted_deps = deps.sort
     safe_name = setup_key.gsub(/[:#]/, '--')
     out_path = File.join(DEPS_DIR, "#{safe_name}.json")
     File.write(out_path, JSON.pretty_generate({
       test_file: data['test_file'],
       method: setup_key,
       type: 'setup',
-      deps: deps.sort,
+      deps: sorted_deps,
+      dep_hashes: hash_deps(sorted_deps),
       traced_at: data['traced_at'],
     }) + "\n")
   end
@@ -202,6 +220,7 @@ def trace_test_file(test_file)
       method: method_id,
       type: 'test',
       deps: method_only,
+      dep_hashes: hash_deps(method_only),
       setup: setup_key,
       traced_at: data['traced_at'],
     }) + "\n")

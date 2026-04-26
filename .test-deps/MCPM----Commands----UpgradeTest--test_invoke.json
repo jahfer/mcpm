@@ -9,6 +9,13 @@
     "test/mcpm/commands/upgrade_test.rb",
     "test/test_helper.rb"
   ],
+  "dep_hashes": {
+    "lib/mcpm/commands/upgrade.rb": "0998017731df6a45256b80f81498a569d36a020c891b2d5d0fd3dcfb16483234",
+    "lib/mods/minecraft_version.rb": "46c50dae0b002f8b8879e45eb89c0395a6c225b73f3a59e5197d978b6c78691d",
+    "lib/mods/mods.rb": "d87403544cb90f405441a8e631ea2edd17b9ea0ff1315fbb47560238f1dab219",
+    "test/mcpm/commands/upgrade_test.rb": "e90a51fafc57223a5cda45daadc40569d0e9beda1a5c63cbf49134414e4f1020",
+    "test/test_helper.rb": "fdee5bdab2b1d3670e814df68d628371df3414860fa4a8610e182a6f7a030d63"
+  },
   "setup": "MCPM::Commands::UpgradeTest#_setup",
-  "traced_at": "2026-04-26T14:14:06Z"
+  "traced_at": "2026-04-26T21:59:36Z"
 }

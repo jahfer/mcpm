@@ -7,6 +7,11 @@
     "lib/mods/updater.rb",
     "test/mod_config_cache_test.rb"
   ],
+  "dep_hashes": {
+    "lib/mods/mods.rb": "d87403544cb90f405441a8e631ea2edd17b9ea0ff1315fbb47560238f1dab219",
+    "lib/mods/updater.rb": "870db294ac2b824b0635f939b537df514bed4af8d811574004c91cd100aa41c0",
+    "test/mod_config_cache_test.rb": "d012bb29bed0e0486017ab45ab46a0733f58ef5fa92f7a78854b5d15d7e441d1"
+  },
   "setup": "ModConfigCacheTest#_setup",
-  "traced_at": "2026-04-26T14:14:06Z"
+  "traced_at": "2026-04-26T21:59:36Z"
 }

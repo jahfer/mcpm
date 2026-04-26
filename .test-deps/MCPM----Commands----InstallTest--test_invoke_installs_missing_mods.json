@@ -8,6 +8,12 @@
     "test/mcpm/commands/install_test.rb",
     "test/test_helper.rb"
   ],
+  "dep_hashes": {
+    "lib/mcpm/commands/install.rb": "cc6b4701a0a6e162bfa253a1d71d5200085bd16e6e10546df7f11fbb70ca7e1a",
+    "lib/mods/mods.rb": "d87403544cb90f405441a8e631ea2edd17b9ea0ff1315fbb47560238f1dab219",
+    "test/mcpm/commands/install_test.rb": "1c7c2401bda9f2dd160b089155a6926631487a5c6466b2c6af0bf2fd54acee52",
+    "test/test_helper.rb": "fdee5bdab2b1d3670e814df68d628371df3414860fa4a8610e182a6f7a030d63"
+  },
   "setup": "MCPM::Commands::InstallTest#_setup",
-  "traced_at": "2026-04-26T14:14:05Z"
+  "traced_at": "2026-04-26T21:59:35Z"
 }

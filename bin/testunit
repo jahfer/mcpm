@@ -13,20 +13,45 @@ def test_files
   Dir.glob(TEST_ROOT + "/**/*_test.rb")
 end
 
+# ── Content hashing ───────────────────────────────────────────────────
+
+def content_hash(relative_path)
+  abs = File.join(ROOT, relative_path)
+  return nil unless File.exist?(abs)
+  Digest::SHA256.hexdigest(File.read(abs))
+end
+
+# Check if a traced method's dep graph is stale.
+# Returns true if any dep file's content has changed since tracing.
+def stale?(method_data, setups)
+  # Check method's own deps
+  (method_data['dep_hashes'] || {}).each do |dep, traced_hash|
+    current = content_hash(dep)
+    return true if current != traced_hash
+  end
+
+  # Check setup deps if this method has a setup dependency
+  if method_data['setup'] && setups[method_data['setup']]
+    setup_data = setups[method_data['setup']]
+    (setup_data['dep_hashes'] || {}).each do |dep, traced_hash|
+      current = content_hash(dep)
+      return true if current != traced_hash
+    end
+  end
+
+  false
+end
+
 # ── Per-method affected resolution ────────────────────────────────────
-# Given changed files, find which test METHODS are affected by
-# consulting the per-method dependency graphs in .test-deps/.
-#
-# Returns an array of { test_file:, method: } hashes.
 
 def load_method_graph
-  tests = []   # [{ test_file:, method:, deps:, setup: }]
-  setups = {}  # "Class#_setup" => [deps]
+  tests = []
+  setups = {}
 
   Dir.glob(DEPS_DIR + "/*.json").each do |f|
     data = JSON.parse(File.read(f))
     if data["type"] == "setup"
-      setups[data["method"]] = data["deps"]
+      setups[data["method"]] = data
     elsif data["type"] == "test"
       tests << data
     end
@@ -36,42 +61,141 @@ def load_method_graph
 end
 
 def affected_methods(changed_files)
-  require 'json'
-  require 'set'
-
   tests, setups = load_method_graph
 
   if tests.empty?
     $stderr.puts "No .test-deps/ found. Run `bin/trace-deps --all` first."
     $stderr.puts "Falling back to all tests."
-    return test_files.map { |f| { "test_file" => f.delete_prefix(ROOT + "/"), "method" => nil } }
+    return test_files.map { |f| { "test_file" => f.delete_prefix(ROOT + "/"), "method" => nil, "stale" => false } }
   end
 
   changed = changed_files.map { |f| f.delete_prefix(ROOT + "/") }.to_set
-
   affected = []
 
   tests.each do |t|
     method_deps = t["deps"].to_set
 
-    # Include setup deps if this method has a setup dependency
-    if t["setup"]
-      setup_deps = (setups[t["setup"]] || []).to_set
-      method_deps = method_deps | setup_deps
+    # Include setup deps
+    if t["setup"] && setups[t["setup"]]
+      setup_data = setups[t["setup"]]
+      method_deps = method_deps | setup_data["deps"].to_set
     end
+
+    hit = false
 
     # Check if any dep was changed
-    if method_deps.any? { |d| changed.include?(d) }
-      affected << { "test_file" => t["test_file"], "method" => t["method"] }
-    end
+    hit = true if method_deps.any? { |d| changed.include?(d) }
 
-    # Also trigger if the test file itself was changed
-    if changed.include?(t["test_file"])
-      affected << { "test_file" => t["test_file"], "method" => t["method"] }
+    # Trigger if the test file itself was changed
+    hit = true if changed.include?(t["test_file"])
+
+    if hit
+      is_stale = stale?(t, setups)
+      affected << {
+        "test_file" => t["test_file"],
+        "method" => t["method"],
+        "stale" => is_stale,
+      }
     end
   end
 
-  affected.uniq
+  affected.uniq { |a| a["method"] }
+end
+
+# ── Running tests (with inline re-tracing for stale methods) ──────────
+#
+# If a method's dep graph is stale (a dep file's content changed since
+# tracing), we re-trace it during execution. This means the trace IS
+# the run — Rotoscope wraps the test method, captures the new dep graph,
+# and writes it back to .test-deps/. No separate re-trace step needed.
+
+EXCLUDE_PATTERNS = [
+  '/vendor/', '/.bundle/', '/.gem/', '/gems/',
+  '/rubygems/', '/bundler/',
+].freeze
+
+def project_local?(path)
+  return false unless path.start_with?(ROOT)
+  EXCLUDE_PATTERNS.none? { |pat| path.include?(pat) }
+end
+
+def hash_deps(deps)
+  deps.each_with_object({}) do |dep, h|
+    h[dep] = content_hash(dep)
+  end
+end
+
+def install_inline_tracer!(stale_methods)
+  require 'rotoscope'
+
+  # Track which methods need re-tracing
+  stale_set = stale_methods.map { |m| m["method"] }.to_set
+  traced_results = {} # method_id => { deps: }
+  tracer_installed = false
+
+  install_hooks = -> {
+    return if tracer_installed
+    tracer_installed = true
+
+    Minitest::Test.prepend(Module.new do
+      define_method(:run) do
+        method_id = "#{self.class.name}##{name}"
+
+        unless stale_set.include?(method_id)
+          return super()
+        end
+
+        $stderr.puts "  ♻ Re-tracing #{method_id}..."
+
+        method_deps = Set.new
+
+        rs = Rotoscope.new do |call|
+          path = call.caller_path
+          method_deps << path if path && project_local?(path)
+        end
+
+        result = nil
+        rs.trace { result = super() }
+
+        runtime = method_deps
+          .map { |p| p.delete_prefix(ROOT + "/") }
+          .to_a.sort
+
+        traced_results[method_id] = {
+          test_file: method(name).source_location&.first&.delete_prefix(ROOT + "/"),
+          deps: runtime,
+        }
+
+        result
+      end
+    end)
+  }
+
+  # Return both the install hook (call after loading test files) and
+  # a finalizer (call after tests run to write updated traces)
+  finalizer = -> {
+    traced_results.each do |method_id, data|
+      safe_name = method_id.gsub(/[:#]/, '--')
+      out_path = File.join(DEPS_DIR, "#{safe_name}.json")
+
+      original = File.exist?(out_path) ? JSON.parse(File.read(out_path)) : {}
+
+      updated = {
+        "test_file" => data[:test_file] || original["test_file"],
+        "method" => method_id,
+        "type" => "test",
+        "deps" => data[:deps],
+        "dep_hashes" => hash_deps(data[:deps]),
+        "setup" => original["setup"],
+        "traced_at" => Time.now.utc.iso8601,
+      }
+
+      File.write(out_path, JSON.pretty_generate(updated) + "\n")
+      $stderr.puts "  ♻ Updated #{out_path}"
+    end
+  }
+
+  [install_hooks, finalizer]
 end
 
 def run_affected(affected)
@@ -80,32 +204,55 @@ def run_affected(affected)
     return
   end
 
-  # Group by test file so we can run methods together
+  stale = affected.select { |a| a["stale"] }
+  fresh = affected.reject { |a| a["stale"] }
+
+  if stale.any?
+    $stderr.puts "#{stale.size} method(s) have stale dep graphs — will re-trace inline"
+  end
+
+  # Group by test file
   by_file = affected.group_by { |a| a["test_file"] }
+
+  # Install inline tracer if any methods are stale
+  install_hooks = nil
+  write_traces = nil
+  if stale.any?
+    install_hooks, write_traces = install_inline_tracer!(stale)
+  end
 
   by_file.each do |test_file, methods|
     abs = File.join(ROOT, test_file)
-
     method_names = methods.filter_map { |m| m["method"] }
+
     if method_names.empty?
-      # No method info — run whole file
       require abs
     else
-      # Extract just the method name (after #)
       names = method_names.map { |m| m.split('#').last }
-      # Build a regex to match any of the method names
       pattern = names.map { |n| Regexp.escape(n) }.join('|')
       ARGV.replace(["-n", "/#{pattern}/"])
       load abs
     end
+  end
+
+  # Now that test files are loaded and Minitest is available, install hooks
+  install_hooks&.call
+
+  # Hook Minitest.run to write updated traces after tests complete
+  if write_traces
+    Minitest.singleton_class.prepend(Module.new do
+      define_method(:run) do |args = []|
+        result = super(args)
+        write_traces.call
+        result
+      end
+    end)
   end
 end
 
 # ── Watch mode ────────────────────────────────────────────────────────
 
 def watch
-  require 'json'
-
   dirs = [ROOT + '/lib', ROOT + '/test']
   poll_interval = 1
 
@@ -144,8 +291,13 @@ def watch
       next
     end
 
-    labels = affected.map { |a| a["method"] || a["test_file"] }
-    puts "  Running #{affected.size} method(s): #{labels.join(', ')}"
+    labels = affected.map { |a|
+      label = a["method"] || a["test_file"]
+      label += " (stale → re-trace)" if a["stale"]
+      label
+    }
+    puts "  Running #{affected.size} method(s):"
+    labels.each { |l| puts "    #{l}" }
 
     pid = fork do
       ARGV.clear
@@ -163,6 +315,7 @@ case ARGV[0]
 when '--affected'
   require 'json'
   require 'set'
+  require 'digest'
   files = ARGV.drop(1)
   ARGV.clear
   if files.empty?
@@ -174,12 +327,19 @@ when '--affected'
     puts "No affected tests."
     exit 0
   end
-  labels = affected.map { |a| a["method"] || a["test_file"] }
-  puts "Running #{affected.size} affected method(s):"
-  labels.each { |l| puts "  #{l}" }
+  stale_count = affected.count { |a| a["stale"] }
+  puts "Running #{affected.size} affected method(s)#{stale_count > 0 ? " (#{stale_count} stale → re-trace)" : ""}:"
+  affected.each do |a|
+    label = a["method"] || a["test_file"]
+    label += " ♻" if a["stale"]
+    puts "  #{label}"
+  end
   puts
   run_affected(affected)
 when '--watch'
+  require 'json'
+  require 'set'
+  require 'digest'
   watch
 when nil
   test_files.each { |f| require(f) }
