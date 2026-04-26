@@ -1,0 +1,175 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# bin/trace-deps-per-test — Proof of concept: per-method dependency tracing
+#
+# Instead of tracing at file granularity, this traces each test METHOD
+# individually via Rotoscope to discover exactly which source files are
+# exercised during that method's execution.
+#
+# Usage:
+#   bin/trace-deps-per-test test/mcpm/commands/outdated_test.rb
+#   bin/trace-deps-per-test --all
+#
+# Output: .test-deps-per-method/<test_file>--<method_name>.json
+
+require 'bundler/setup'
+require 'json'
+require 'set'
+require 'fileutils'
+require 'open3'
+
+PROJECT_ROOT = File.expand_path('..', __dir__)
+DEPS_DIR = File.join(PROJECT_ROOT, '.test-deps-per-method')
+TEST_ROOT = File.join(PROJECT_ROOT, 'test')
+
+EXCLUDE_PATTERNS = [
+  '/vendor/', '/.bundle/', '/.gem/', '/gems/',
+  '/rubygems/', '/bundler/',
+].freeze
+
+def trace_test_file(test_file)
+  abs_path = File.expand_path(test_file, PROJECT_ROOT)
+  raise "File not found: #{abs_path}" unless File.exist?(abs_path)
+
+  $stderr.puts "▶ Tracing methods in #{test_file}..."
+
+  # The subprocess:
+  # 1. Loads the test file (capturing file-level deps)
+  # 2. Hooks into Minitest to trace each method with Rotoscope
+  # 3. Outputs JSON: { "ClassName#method": [deps], ... }
+  script = <<~RUBY
+    require 'bundler/setup'
+    require 'rotoscope'
+    require 'json'
+    require 'set'
+
+    PROJECT_ROOT = #{PROJECT_ROOT.inspect}
+    EXCLUDE_PATTERNS = #{EXCLUDE_PATTERNS.inspect}
+
+    def project_local?(path)
+      return false unless path.start_with?(PROJECT_ROOT)
+      EXCLUDE_PATTERNS.none? { |pat| path.include?(pat) }
+    end
+
+    $LOAD_PATH.unshift(File.join(PROJECT_ROOT, 'lib'))
+    $LOAD_PATH.unshift(File.join(PROJECT_ROOT, 'test'))
+
+    # Track file-level deps (from require at load time)
+    loaded_before = $LOADED_FEATURES.dup
+    load(#{abs_path.inspect})
+    file_level_deps = ($LOADED_FEATURES - loaded_before)
+      .select { |f| project_local?(f) }
+      .map { |f| f.delete_prefix(PROJECT_ROOT + "/") }
+      .to_set
+
+    # Store per-method results
+    method_deps = {}
+
+    # Hook into Minitest::Test#run to wrap each test method with Rotoscope
+    Minitest::Test.prepend(Module.new do
+      define_method(:run) do
+        method_id = "\#{self.class.name}#\#{name}"
+        deps = Set.new
+
+        rs = Rotoscope.new do |call|
+          path = call.caller_path
+          deps << path if path && project_local?(path)
+        end
+
+        result = nil
+        rs.trace { result = super() }
+
+        runtime_deps = deps
+          .map { |p| p.delete_prefix(PROJECT_ROOT + "/") }
+          .to_set
+
+        # Per-method deps = file-level (require) + runtime (Rotoscope)
+        method_deps[method_id] = (file_level_deps | runtime_deps).to_a.sort
+
+        result
+      end
+    end)
+
+    # Hook into Minitest reporting to write results after all tests finish
+    Minitest.singleton_class.prepend(Module.new do
+      define_method(:run) do |args = []|
+        result = super(args)
+
+        output_path = File.join(#{DEPS_DIR.inspect}, '.trace-output.json')
+        FileUtils.mkdir_p(#{DEPS_DIR.inspect})
+        File.write(output_path, JSON.generate({
+          test_file: #{test_file.inspect},
+          methods: method_deps,
+          traced_at: Time.now.utc.iso8601,
+        }))
+
+        result
+      end
+    end)
+  RUBY
+
+  out, status = Open3.capture2(
+    RbConfig.ruby, '-e', script,
+    chdir: PROJECT_ROOT
+  )
+
+  # Read the results from the temp file (avoids parsing minitest output)
+  output_path = File.join(DEPS_DIR, '.trace-output.json')
+  unless File.exist?(output_path)
+    $stderr.puts "  ✗ No trace output for #{test_file}"
+    $stderr.puts out unless out.empty?
+    return
+  end
+
+  data = JSON.parse(File.read(output_path))
+  File.delete(output_path)
+
+  # Write individual per-method files
+  data['methods'].each do |method_id, deps|
+    safe_name = method_id.gsub(/[:#]/, '--').gsub('/', '--')
+    out_path = File.join(DEPS_DIR, "#{safe_name}.json")
+    result = {
+      test_file: data['test_file'],
+      method: method_id,
+      deps: deps,
+      traced_at: data['traced_at'],
+    }
+    File.write(out_path, JSON.pretty_generate(result) + "\n")
+  end
+
+  $stderr.puts "  → #{data['methods'].size} method(s) traced"
+
+  # Print summary showing dep differences between methods
+  if data['methods'].size > 1
+    all_deps = data['methods'].values
+    shared = all_deps.reduce { |a, b| a & b }
+    data['methods'].each do |method_id, deps|
+      unique = deps - shared
+      if unique.empty?
+        $stderr.puts "    #{method_id}: (same as shared)"
+      else
+        $stderr.puts "    #{method_id}: +#{unique.size} unique — #{unique.join(', ')}"
+      end
+    end
+  end
+end
+
+def all_test_files
+  Dir.glob(File.join(TEST_ROOT, '**/*_test.rb'))
+    .map { |f| f.delete_prefix("#{PROJECT_ROOT}/") }
+end
+
+# ── Main ──────────────────────────────────────────────────────────────
+
+FileUtils.mkdir_p(DEPS_DIR)
+
+case ARGV[0]
+when '--all'
+  all_test_files.each { |f| trace_test_file(f) }
+when nil
+  $stderr.puts "Usage: bin/trace-deps-per-test <test_file> | --all"
+  exit 1
+else
+  ARGV.each { |f| trace_test_file(f) }
+end

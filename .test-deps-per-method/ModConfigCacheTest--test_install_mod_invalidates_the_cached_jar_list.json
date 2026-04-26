@@ -1,0 +1,15 @@
+{
+  "test_file": "test/mod_config_cache_test.rb",
+  "method": "ModConfigCacheTest#test_install_mod_invalidates_the_cached_jar_list",
+  "deps": [
+    "lib/mods/downloader.rb",
+    "lib/mods/minecraft_version.rb",
+    "lib/mods/modrinth.rb",
+    "lib/mods/mods.rb",
+    "lib/mods/updater.rb",
+    "lib/utility/yaml.rb",
+    "test/mod_config_cache_test.rb",
+    "test/test_helper.rb"
+  ],
+  "traced_at": "2026-04-26T14:10:30Z"
+}
