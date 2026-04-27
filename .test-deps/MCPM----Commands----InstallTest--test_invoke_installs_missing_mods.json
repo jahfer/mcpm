@@ -14,6 +14,16 @@
     "test/mcpm/commands/install_test.rb": "1c7c2401bda9f2dd160b089155a6926631487a5c6466b2c6af0bf2fd54acee52",
     "test/test_helper.rb": "fdee5bdab2b1d3670e814df68d628371df3414860fa4a8610e182a6f7a030d63"
   },
+  "boot_deps": [
+    "lib/mcpm/commands/install.rb",
+    "lib/mods/downloader.rb",
+    "lib/mods/minecraft_version.rb",
+    "lib/mods/modrinth.rb",
+    "lib/mods/mods.rb",
+    "lib/mods/updater.rb",
+    "lib/utility/yaml.rb",
+    "test/test_helper.rb"
+  ],
   "setup": "MCPM::Commands::InstallTest#_setup",
-  "traced_at": "2026-04-26T21:59:35Z"
+  "traced_at": "2026-04-27T11:54:45Z"
 }

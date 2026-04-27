@@ -83,6 +83,9 @@ def trace_test_file(test_file)
     $LOAD_PATH.unshift(File.join(PROJECT_ROOT, 'lib'))
     $LOAD_PATH.unshift(File.join(PROJECT_ROOT, 'test'))
 
+    # Snapshot before loading the test file
+    loaded_before = $LOADED_FEATURES.dup
+
     load(#{abs_path.inspect})
 
     # Per-method and per-lifecycle results
@@ -162,10 +165,20 @@ def trace_test_file(test_file)
 
         output_path = File.join(#{DEPS_DIR.inspect}, '.trace-output.json')
         FileUtils.mkdir_p(#{DEPS_DIR.inspect})
+
+        # Capture boot deps: all project-local files that were loaded
+        # when the test file was require'd (before any test method ran).
+        # These are needed to RUN but don't affect invalidation.
+        boot_deps = ($LOADED_FEATURES - loaded_before)
+          .select { |f| project_local?(f) }
+          .map { |f| f.delete_prefix(PROJECT_ROOT + "/") }
+          .sort
+
         File.write(output_path, JSON.generate({
           test_file: #{test_file.inspect},
           methods: method_deps,
           setup: setup_deps.transform_values(&:to_a),
+          boot_deps: boot_deps,
           traced_at: Time.now.utc.iso8601,
         }))
 
@@ -189,6 +202,8 @@ def trace_test_file(test_file)
   data = JSON.parse(File.read(output_path))
   File.delete(output_path)
 
+  boot_deps = data['boot_deps'] || []
+
   # Write setup deps (shared per class)
   data['setup'].each do |setup_key, deps|
     sorted_deps = deps.sort
@@ -200,6 +215,7 @@ def trace_test_file(test_file)
       type: 'setup',
       deps: sorted_deps,
       dep_hashes: hash_deps(sorted_deps),
+      boot_deps: boot_deps,
       traced_at: data['traced_at'],
     }) + "\n")
   end
@@ -221,6 +237,7 @@ def trace_test_file(test_file)
       type: 'test',
       deps: method_only,
       dep_hashes: hash_deps(method_only),
+      boot_deps: boot_deps,
       setup: setup_key,
       traced_at: data['traced_at'],
     }) + "\n")

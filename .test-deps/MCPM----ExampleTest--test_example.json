@@ -8,6 +8,11 @@
   "dep_hashes": {
     "test/example_test.rb": "684565e9b17b309352ad728cccb5ac67a31cffbc7ea74e95d3bc70e390a6142a"
   },
+  "boot_deps": [
+    "lib/mods/minecraft_version.rb",
+    "lib/mods/modrinth.rb",
+    "test/test_helper.rb"
+  ],
   "setup": "MCPM::ExampleTest#_setup",
-  "traced_at": "2026-04-26T21:59:35Z"
+  "traced_at": "2026-04-27T11:54:44Z"
 }

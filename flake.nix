@@ -1,5 +1,5 @@
 {
-  description = "mcpm – incremental test builds";
+  description = "mcpm – incremental test builds (per-method)";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
@@ -12,7 +12,6 @@
         pkgs = nixpkgs.legacyPackages.${system};
         ruby = pkgs.ruby_4_0;
 
-        # Bundler environment built from Gemfile + gemset.nix
         gems = pkgs.bundlerEnv {
           name = "mcpm-gems";
           inherit ruby;
@@ -20,39 +19,38 @@
           buildInputs = [ pkgs.libyaml ];
         };
 
-        # ── Test dependency manifest (auto-generated) ───────────────
+        # ── Per-method test manifest (auto-generated) ───────────────
         # Produced by: bin/trace-deps --all && bin/compile-test-deps
-        testDeps = import ./nix/test-deps.nix;
+        # Each entry has: name, testFile, methodName, deps
+        # deps are ONLY the files whose code executed during that
+        # method at runtime (Rotoscope-traced, not require-based).
+        testMethods = import ./nix/test-deps.nix;
 
-        # ── Tier 1: shared deps (test_helper.rb + its transitive requires)
-        sharedFiles = testDeps._shared.srcs;
-
-        # ── Per-test entries (everything except _shared) ────────────
-        perTestDeps = builtins.removeAttrs testDeps [ "_shared" ];
-
-        # ── Per-test derivation builder ─────────────────────────────
-        mkTest = testFile: { srcs }:
+        # ── Per-method derivation builder ───────────────────────────
+        # Each test method is its own derivation. The src contains
+        # ONLY the files that executed during that method. If none
+        # of them change, Nix skips the test entirely (cache hit).
+        mkMethodTest = { name, testFile, methodName, deps, bootDeps }:
           let
-            # All files this test needs: the test itself + per-test srcs + shared srcs + fixtures
-            allFiles =
-              [ testFile ]
-              ++ srcs
-              ++ sharedFiles;
+            # Runtime deps (from Rotoscope) are the CACHE KEY — changing
+            # these triggers a rebuild. Boot deps (from $LOADED_FEATURES)
+            # are files needed to load the test but don't affect the
+            # result. Both are included in src, but only runtime deps
+            # drive invalidation in practice because boot deps are stable
+            # (they only change when require statements change, which
+            # would also change the source file — a runtime dep).
+            allFiles = pkgs.lib.lists.unique (deps ++ bootDeps);
 
             testSrc = pkgs.lib.fileset.toSource {
               root = ./.;
               fileset = pkgs.lib.fileset.unions (
-                # Precise file-level deps from Rotoscope tracing
                 (map (f: ./. + "/${f}") allFiles)
-                # Fixtures are directories, always included
                 ++ [ ./test/fixtures ]
               );
             };
-
-            safeName = builtins.replaceStrings [ "/" "." ] [ "-" "_" ] testFile;
           in
           pkgs.stdenv.mkDerivation {
-            name = "mcpm-test-${safeName}";
+            name = "mcpm-test-${name}";
             src = testSrc;
 
             nativeBuildInputs = [ gems ruby gems.wrappedRuby ];
@@ -64,35 +62,39 @@
             checkPhase = ''
               runHook preCheck
               export HOME=$TMPDIR
-              echo "▶ Running ${testFile}..."
-              ruby -Itest -Ilib ${testFile}
+              echo "▶ ${name}"
+              ruby -Itest -Ilib ${testFile} --name ${methodName}
               runHook postCheck
             '';
 
             installPhase = ''
               mkdir -p $out
-              echo "PASS ${testFile}" > $out/result
-              date -u '+%Y-%m-%dT%H:%M:%SZ' > $out/timestamp
+              echo "PASS ${name}" > $out/result
             '';
           };
 
-        # ── Build all test derivations from the manifest ────────────
-        testDerivations = builtins.mapAttrs mkTest perTestDeps;
+        # ── Build all method derivations ────────────────────────────
+        testDerivations = map mkMethodTest testMethods;
 
-        # ── Aggregate: build this to run all tests ──────────────────
+        # Named attribute set for individual access
+        testsByName = builtins.listToAttrs (
+          map (t: {
+            name = t.name;
+            value = mkMethodTest t;
+          }) testMethods
+        );
+
+        # ── Aggregate ───────────────────────────────────────────────
         allTests = pkgs.symlinkJoin {
           name = "mcpm-tests-all";
-          paths = builtins.attrValues testDerivations;
+          paths = testDerivations;
         };
 
       in {
         packages = {
           tests = allTests;
-        }
-        # Also expose individual test derivations as packages
-        // builtins.mapAttrs (_: drv: drv) testDerivations;
+        } // testsByName;
 
-        # Quick check: `nix flake check` runs all tests
         checks.tests = allTests;
       }
     );

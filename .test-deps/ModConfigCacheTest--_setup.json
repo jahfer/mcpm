@@ -4,5 +4,14 @@
   "type": "setup",
   "deps": [],
   "dep_hashes": {},
-  "traced_at": "2026-04-26T21:59:36Z"
+  "boot_deps": [
+    "lib/mods/downloader.rb",
+    "lib/mods/minecraft_version.rb",
+    "lib/mods/modrinth.rb",
+    "lib/mods/mods.rb",
+    "lib/mods/updater.rb",
+    "lib/utility/yaml.rb",
+    "test/test_helper.rb"
+  ],
+  "traced_at": "2026-04-27T11:54:45Z"
 }

@@ -16,6 +16,16 @@
     "test/mcpm/commands/upgrade_test.rb": "e90a51fafc57223a5cda45daadc40569d0e9beda1a5c63cbf49134414e4f1020",
     "test/test_helper.rb": "fdee5bdab2b1d3670e814df68d628371df3414860fa4a8610e182a6f7a030d63"
   },
+  "boot_deps": [
+    "lib/mcpm/commands/upgrade.rb",
+    "lib/mods/downloader.rb",
+    "lib/mods/minecraft_version.rb",
+    "lib/mods/modrinth.rb",
+    "lib/mods/mods.rb",
+    "lib/mods/updater.rb",
+    "lib/utility/yaml.rb",
+    "test/test_helper.rb"
+  ],
   "setup": "MCPM::Commands::UpgradeTest#_setup",
-  "traced_at": "2026-04-26T21:59:36Z"
+  "traced_at": "2026-04-27T11:54:45Z"
 }

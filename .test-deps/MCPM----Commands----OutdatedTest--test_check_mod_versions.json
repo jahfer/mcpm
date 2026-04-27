@@ -14,6 +14,16 @@
     "test/mcpm/commands/outdated_test.rb": "59ab7d1f3a101bff267cdcb349917bafeea5b23c8d8e225bec56bd059e058ade",
     "test/test_helper.rb": "fdee5bdab2b1d3670e814df68d628371df3414860fa4a8610e182a6f7a030d63"
   },
+  "boot_deps": [
+    "lib/mcpm/commands/outdated.rb",
+    "lib/mods/downloader.rb",
+    "lib/mods/minecraft_version.rb",
+    "lib/mods/modrinth.rb",
+    "lib/mods/mods.rb",
+    "lib/mods/updater.rb",
+    "lib/utility/yaml.rb",
+    "test/test_helper.rb"
+  ],
   "setup": "MCPM::Commands::OutdatedTest#_setup",
-  "traced_at": "2026-04-26T21:59:36Z"
+  "traced_at": "2026-04-27T11:54:45Z"
 }

@@ -12,6 +12,15 @@
     "lib/mods/updater.rb": "870db294ac2b824b0635f939b537df514bed4af8d811574004c91cd100aa41c0",
     "test/mod_config_cache_test.rb": "d012bb29bed0e0486017ab45ab46a0733f58ef5fa92f7a78854b5d15d7e441d1"
   },
+  "boot_deps": [
+    "lib/mods/downloader.rb",
+    "lib/mods/minecraft_version.rb",
+    "lib/mods/modrinth.rb",
+    "lib/mods/mods.rb",
+    "lib/mods/updater.rb",
+    "lib/utility/yaml.rb",
+    "test/test_helper.rb"
+  ],
   "setup": "ModConfigCacheTest#_setup",
-  "traced_at": "2026-04-26T21:59:36Z"
+  "traced_at": "2026-04-27T11:54:45Z"
 }
