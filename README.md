@@ -56,122 +56,100 @@ This gives you Ruby 4.0, bundler, and all dependencies.
 ### Running Tests
 
 ```bash
-devenv tasks run mcpm:test                        # run all tests
-devenv tasks run mcpm:test test/example_test.rb   # run a single file
+bin/testunit                                      # run all tests
+bin/testunit test/mcpm/commands/install_test.rb   # run a single file
+bin/testunit --affected lib/mods/updater.rb       # run only affected methods
+bin/testunit --watch                              # watch for changes
 ```
 
 ---
 
-## Incremental Test Builds
+## Incremental Test Running
 
-> **For contributors.** This section documents an experimental system that
-> treats tests like incremental compilation — only re-running tests whose
-> source dependencies have changed.
-
-mcpm models each test as a Nix derivation whose inputs are the source files
-it depends on. If none of those files change, the test result is cached in the
-Nix store and the test doesn't re-run.
-
-This is powered by two systems working together:
-
-1. **Dependency tracing** — [Rotoscope](https://github.com/Shopify/rotoscope)
-   + `$LOADED_FEATURES` diffing to discover which source files each test
-   actually touches at runtime
-2. **Nix derivations** — each test becomes a content-addressed Nix derivation
-   whose inputs are its traced dependencies; Nix's store handles caching
-
-### Quick Start
-
-```bash
-# 1. Trace all test dependencies (writes .test-deps/*.json)
-bin/trace-deps --all
-
-# 2. Compile traced deps into a Nix manifest
-bin/compile-test-deps
-
-# 3. Run tests — only changed tests execute
-nix build .#tests --print-build-logs
-```
-
-On the first run, all tests execute. On subsequent runs, only tests whose
-source dependencies changed will re-run. Everything else is served from the
-Nix store cache (~0.6s for a fully cached run).
+> **For contributors.** This section documents the system that runs only the
+> test methods whose source dependencies have actually changed.
 
 ### How It Works
 
-#### Dependency Tracing
+Each test method is traced with [Rotoscope](https://github.com/Shopify/rotoscope)
+to discover which source files have code that **actually executes** during that
+method. File-level `require` is ignored — only runtime calls matter. If a file
+is loaded but no code in it runs during a test method, changing that file won't
+trigger that method.
 
-`bin/trace-deps` runs each test in isolation and records every project-local
-file that was loaded during execution. It uses two complementary strategies:
+#### Tracing
 
-- **Rotoscope** traces method calls and captures `caller_path` — the file
-  where each call originates
-- **`$LOADED_FEATURES` diffing** catches files that were `require`'d but
-  may not have had methods called on them
+`bin/trace-deps` runs each test in an isolated subprocess and wraps every test
+method with Rotoscope. setup/teardown are traced separately as shared deps for
+all methods in a class.
 
-Each test is traced in a **subprocess** to ensure a clean `$LOADED_FEATURES`
-(see [Ruby::Box mode](#rubybox-experimental) for an in-process alternative).
+```bash
+bin/trace-deps --all        # trace every test file
+bin/trace-deps test/foo.rb  # trace a single file
+```
 
-The output is a set of JSON files in `.test-deps/`:
+Output is per-method JSON in `.test-deps/`:
 
 ```json
 {
-  "test_file": "test/mcpm/commands/install_test.rb",
-  "deps": [
-    "lib/mcpm/commands/install.rb",
-    "lib/mods/downloader.rb",
-    "lib/mods/mods.rb",
-    "lib/mods/updater.rb",
-    "lib/utility/yaml.rb",
-    "test/mcpm/commands/install_test.rb",
-    "test/test_helper.rb"
-  ],
-  "traced_at": "2026-04-26T13:45:44Z"
+  "test_file": "test/mod_config_cache_test.rb",
+  "method": "ModConfigCacheTest#test_apply_updates",
+  "type": "test",
+  "deps": ["lib/mods/mods.rb", "lib/mods/updater.rb", "test/mod_config_cache_test.rb"],
+  "dep_hashes": {
+    "lib/mods/mods.rb": "d874035...",
+    "lib/mods/updater.rb": "a1b2c3d...",
+    "test/mod_config_cache_test.rb": "d012bb2..."
+  },
+  "boot_deps": ["lib/mods/downloader.rb", "lib/mods/modrinth.rb", "..."],
+  "setup": "ModConfigCacheTest#_setup"
 }
 ```
 
-#### Tiered Dependencies
+- **deps** — files whose code ran during this method (Rotoscope `caller_path`)
+- **dep_hashes** — SHA256 of each dep at trace time (for staleness detection)
+- **boot_deps** — files loaded via `require` at file load time (needed to run
+  but not for invalidation)
+- **setup** — reference to the shared setup/teardown trace for this class
 
-`bin/compile-test-deps` reads the traced JSON and generates `nix/test-deps.nix`
-with a two-tier structure:
+#### Affected Resolution
 
-- **Tier 1 (shared):** Dependencies from `test_helper.rb` — loaded by every
-  test. Changing these invalidates all test caches.
-- **Tier 2 (per-test):** The delta between a test's full deps and the shared
-  set. Changing `lib/mcpm/commands/outdated.rb` only invalidates `outdated_test`.
+`bin/testunit --affected` reads the dep graph and runs only methods whose
+runtime deps include the changed files:
 
+```bash
+$ bin/testunit --affected lib/mods/updater.rb
+Running 1 affected method(s):
+  ModConfigCacheTest#test_apply_updates_invalidates_the_cached_jar_list_after_replacing_the_mods_directory
+
+# (the other 2 ModConfigCacheTest methods don't call updater.rb at runtime — skipped)
 ```
-Shared (tier 1):          Per-test (tier 2):
-  test/test_helper.rb       install_test → install.rb, downloader.rb, mods.rb, ...
-  lib/mods/modrinth.rb      outdated_test → outdated.rb
-  lib/mods/minecraft_version.rb  upgrade_test → upgrade.rb
+
+Individual methods are run via minitest's `--name` flag.
+
+#### Content Hashing & Self-Healing
+
+Each dep stores a SHA256 content hash from when it was traced. On `--affected`:
+
+1. Find methods whose deps include the changed files
+2. Check if any dep's current hash differs from the traced hash
+3. **If stale** — the dep graph might be outdated (a `require` could have been
+   added). The method is re-traced inline during execution: Rotoscope wraps the
+   test, captures the new dep graph, and writes it back to `.test-deps/`.
+4. **If fresh** — just run the test, no tracing overhead.
+
+This makes the dep graph **self-healing** — it converges to accuracy through
+normal use. After the initial `bin/trace-deps --all`, you rarely need to
+re-trace manually.
+
+#### Watch Mode
+
+```bash
+bin/testunit --watch
 ```
 
-#### Nix Derivations
-
-`flake.nix` maps each test to a Nix derivation whose `src` is the precise
-set of files from its dependency manifest. Nix's content-addressed store means:
-
-| What changed | What re-runs |
-|---|---|
-| `lib/mcpm/commands/outdated.rb` | Only `outdated_test` |
-| `lib/mods/mods.rb` | Tests that depend on it (install, outdated, upgrade, mod_config_cache) |
-| `test/test_helper.rb` | All tests (shared tier 1 dep) |
-| Nothing | Nothing (~0.6s) |
-
-### When to Re-trace
-
-The dependency graph needs to be re-traced when:
-
-- **A test file changes** — it might have new `require` statements
-- **Any file in a test's dep graph changes** — it might add a `require`
-  (e.g., `install.rb` starts requiring a new module)
-- **`test_helper.rb` changes** — re-trace tier 1, then diff; only cascade
-  to per-test re-tracing if the shared dep set actually changed
-
-For now, re-tracing is manual (`bin/trace-deps --all`). A future improvement
-would be to detect stale traces by comparing file mtimes or git SHAs against
-the `traced_at` timestamps.
+Polls `lib/` and `test/` for mtime changes, runs affected methods in a
+subprocess on each change. Stale methods are re-traced inline automatically.
 
 ### Ruby::Box (Experimental)
 
@@ -183,41 +161,15 @@ in-process isolation instead of subprocesses:
 RUBY_BOX=1 ruby bin/trace-deps --all --box
 ```
 
-Ruby::Box (introduced in Ruby 4.0, `RUBY_BOX=1` env var) provides isolated
-`$LOADED_FEATURES`, constants, and global variables per box — exactly what's
-needed for dependency tracing without fork overhead.
-
-**How it works:**
-
-1. All native extensions (json, psych, zlib, openssl, etc.) are pre-loaded
-   in the main box before any test boxes are created
-2. Each test gets its own `Ruby::Box.new` with the project's load paths
-3. `$LOADED_FEATURES` is diffed before/after `box.load(test_file)` to
-   capture dependencies
-4. Each box sees a fresh Ruby environment — no cross-contamination between
-   tests
-
-**Current limitations (Ruby 4.0.x):**
-
-- The Box copy-on-write (CoW) mechanism copies native `.bundle`/`.so` files
-  for each new box, which can cause crashes after several boxes are created
-  (`"Installing native extensions may fail under RUBY_BOX=1"`)
-- Pre-loading native extensions in the main box reduces but doesn't eliminate
-  this — the VM still CoW's extension metadata per box
-- In testing, the mechanism successfully traced all 5 test files before
-  crashing on process cleanup, producing correct results identical to
-  subprocess mode
-
-**When Box stabilizes**, it would eliminate ~200ms of subprocess startup per
-test during tracing — significant at scale (hundreds of tests).
+Each test gets its own `Ruby::Box.new` with isolated `$LOADED_FEATURES`.
+All native extensions are pre-loaded in the main box to work around the CoW
+mechanism in Ruby 4.0.x, which can crash after several boxes are created.
+When Box stabilizes, it would eliminate subprocess overhead during tracing.
 
 ### File Overview
 
 ```
-bin/trace-deps          # Trace test dependencies (Rotoscope + $LOADED_FEATURES)
-bin/compile-test-deps   # Compile .test-deps/*.json → nix/test-deps.nix
-.test-deps/             # Cached dependency graphs (JSON)
-nix/test-deps.nix       # Auto-generated Nix manifest (do not edit)
-flake.nix               # Nix flake with per-test derivations
-gemset.nix              # Nix gem environment (generated by bundix)
+bin/trace-deps      # Trace per-method runtime deps (Rotoscope)
+bin/testunit        # Test runner with --affected, --watch
+.test-deps/         # Cached per-method dependency graphs (JSON)
 ```
