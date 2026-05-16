@@ -33,7 +33,9 @@ module Mods
 
       def fetch_supported_versions(project_id, minecraft_version: nil, mod_loader: nil)
         @fetch_supported_versions ||= {}
-        @fetch_supported_versions["#{project_id}_#{mod_loader}"] ||= begin
+        cache_key = [project_id, minecraft_version&.to_s, mod_loader].join('_')
+
+        @fetch_supported_versions[cache_key] ||= begin
           versions = fetch_versions_response(project_id, minecraft_version: minecraft_version, mod_loader: mod_loader)
           all_versions = versions.flat_map do |v|
             v['game_versions'].map { |gv| MinecraftVersion.new(gv) }
@@ -42,28 +44,23 @@ module Mods
           if versions.empty?
             raise NotFoundError, "No versions found for project #{project_id} with specified filters"
           end
+
           all_versions.select(&:release?).sort
         end
       end
 
       def fetch_available_versions(project_id, minecraft_version: nil, mod_loader: nil)
-        fetch_versions_response(project_id, minecraft_version:, mod_loader:).map do |v|
+        compatible_versions_response(project_id, minecraft_version:, mod_loader:).map do |v|
           VersionInfo.new(v.fetch("version_number"), MinecraftVersion.new(v.fetch("game_versions").first))
         end
       end
 
       def remote_file_for_mod(project_id:, minecraft_version: nil, mod_loader: nil)
-        selected_version = fetch_versions_response(project_id, minecraft_version:, mod_loader:).first
+        selected_version = compatible_versions_response(project_id, minecraft_version:, mod_loader:).first
+        raise NotFoundError, "No versions found for project #{project_id} with specified filters" unless selected_version
 
-        if selected_version
-          response = fetch_version_response(selected_version.fetch("id"))
-          response.fetch("files", []).first
-        else
-          alternate_version = MinecraftVersion.compatible_version(minecraft_version)
-          raise NotFoundError, "No versions found for project #{project_id} with specified filters" unless alternate_version
-
-          return remote_file_for_mod(project_id:, minecraft_version: alternate_version, mod_loader:)
-        end
+        response = fetch_version_response(selected_version.fetch("id"))
+        response.fetch("files", []).first
       end
 
       private
@@ -77,10 +74,21 @@ module Mods
         uri = URI("#{API_BASE_URL}/project/#{project_id}/version")
 
         params = {}
-        params['game_versions'] = JSON.generate([minecraft_version]) if minecraft_version
+        params['game_versions'] = JSON.generate([minecraft_version.to_s]) if minecraft_version
         params['loaders'] = JSON.generate([mod_loader]) if mod_loader
 
         http_get(uri, params)
+      end
+
+      def compatible_versions_response(project_id, minecraft_version: nil, mod_loader: nil)
+        versions = fetch_versions_response(project_id, minecraft_version:, mod_loader:)
+        return versions if versions.any? || minecraft_version.nil?
+
+        fetch_versions_response(project_id, mod_loader:).select do |version|
+          version.fetch('game_versions', []).any? do |game_version|
+            MinecraftVersion.new(game_version).compatible_with?(minecraft_version)
+          end
+        end
       end
 
       private
